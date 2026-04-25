@@ -11,8 +11,9 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
-nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+nih_plug = { git = "https://github.com/audio-forge-rs/nih-plug.git", branch = "master" }
+nih_plug_egui = { git = "https://github.com/audio-forge-rs/nih-plug.git", branch = "master" }
+atomic_refcell = "0.1"
 realfft = "3.3"
 ebur128 = "0.1"
 crossbeam-queue = "0.3"

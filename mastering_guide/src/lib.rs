@@ -39,22 +39,30 @@ impl Plugin for MasteringGuide {
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
+        context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         if !self.analysis.initialize(buffer_config.sample_rate, buffer_config.max_buffer_size as usize) {
             return false;
         }
 
-        // Claim a registry slot on first activation; re-use on re-activation.
+        // Use the CLAP track-info extension to get the real track name when
+        // available (Bitwig supports clap.track-info). Falls back to slot index.
+        let name_from_host = context.track_info()
+            .and_then(|ti| ti.name.clone())
+            .filter(|n| !n.is_empty());
+
         if self.registry.is_none() {
             let mode = if self.params.mode.value() == ModeParam::Master { 1 } else { 0 };
-            let name = format!("Track ?"); // placeholder; refined in first GUI repaint
-            if let Some(reg) = Registry::new(mode, name) {
+            if let Some(reg) = Registry::new(mode, String::from("Track ?")) {
                 let slot = reg.slot_index();
-                self.track_name = format!("Track {}", slot + 1);
+                self.track_name = name_from_host
+                    .unwrap_or_else(|| format!("Track {}", slot + 1));
                 self.registry = Some(Arc::new(reg));
             }
+        } else if let Some(real_name) = name_from_host {
+            // Re-activation (e.g. sample-rate change): refresh the name.
+            self.track_name = real_name;
         }
 
         true

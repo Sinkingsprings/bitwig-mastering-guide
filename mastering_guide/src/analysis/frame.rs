@@ -1,4 +1,5 @@
-use std::sync::{Arc, RwLock};
+use atomic_refcell::AtomicRefCell;
+use std::sync::Arc;
 
 pub const NUM_BANDS: usize = 10;
 
@@ -23,30 +24,30 @@ pub struct TrackFrame {
     pub timestamp_ms: u64,
 }
 
-/// Shared between audio thread (writer) and main thread (reader).
-/// Uses RwLock for simplicity at this stage; no allocation on audio thread
-/// since we only write a plain Copy-able struct.
+/// Shared between audio thread (writer) and GUI thread (reader).
+/// AtomicRefCell gives lock-free non-blocking access on both sides:
+/// try_borrow_mut() on the audio thread and try_borrow() on the GUI thread
+/// both return immediately if contended, so neither thread ever waits.
 #[derive(Clone)]
-pub struct FrameReader(pub Arc<RwLock<TrackFrame>>);
+pub struct FrameReader(pub Arc<AtomicRefCell<TrackFrame>>);
 
-pub struct FrameWriter(pub Arc<RwLock<TrackFrame>>);
+pub struct FrameWriter(pub Arc<AtomicRefCell<TrackFrame>>);
 
 pub fn frame_channel() -> (FrameWriter, FrameReader) {
-    let shared = Arc::new(RwLock::new(TrackFrame::default()));
+    let shared = Arc::new(AtomicRefCell::new(TrackFrame::default()));
     (FrameWriter(shared.clone()), FrameReader(shared))
 }
 
 impl FrameWriter {
     pub fn update(&self, frame: TrackFrame) {
-        if let Ok(mut guard) = self.0.try_write() {
+        if let Ok(mut guard) = self.0.try_borrow_mut() {
             *guard = frame;
         }
-        // If the lock is contended we just skip this update — stale data is fine
     }
 }
 
 impl FrameReader {
     pub fn read(&self) -> TrackFrame {
-        self.0.read().map(|g| g.clone()).unwrap_or_default()
+        self.0.try_borrow().map(|g| g.clone()).unwrap_or_default()
     }
 }

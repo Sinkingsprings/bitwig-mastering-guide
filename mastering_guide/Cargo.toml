@@ -11,8 +11,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-nih_plug = { git = "https://github.com/audio-forge-rs/nih-plug.git", branch = "master" }
-nih_plug_egui = { git = "https://github.com/audio-forge-rs/nih-plug.git", branch = "master" }
+nih_plug = { git = "https://github.com/Sinkingsprings/nih-plug.git", branch = "master" }
+nih_plug_egui = { git = "https://github.com/Sinkingsprings/nih-plug.git", branch = "master" }
 atomic_refcell = "0.1"
 realfft = "3.3"
 ebur128 = "0.1"
@@ -20,6 +20,11 @@ crossbeam-queue = "0.3"
 atomic_float = "1.0"
 num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
+
+# Redirect all transitive consumers of audio-forge-rs/baseview to our patched
+# fork that exits gracefully on POLLERR instead of panicking.
+[patch."https://github.com/audio-forge-rs/baseview.git"]
+baseview = { git = "https://github.com/Sinkingsprings/baseview.git", branch = "fix-null-window-crash" }
 
 [profile.release]
 lto = true

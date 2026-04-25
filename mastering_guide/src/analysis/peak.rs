@@ -9,10 +9,10 @@ pub struct PeakAnalyzer {
     /// Running DC offset accumulator
     dc_sum: f64,
     dc_count: u64,
-    /// Short RMS window (300ms worth of samples)
-    rms_sum: f64,
-    rms_count: u64,
-    rms_window_samples: usize,
+    /// EMA of instantaneous power (true 300 ms sliding window via exponential decay)
+    rms_power: f64,
+    /// Per-sample EMA coefficient; set in initialize()
+    rms_alpha: f64,
 }
 
 impl PeakAnalyzer {
@@ -23,14 +23,14 @@ impl PeakAnalyzer {
             prev: [0.0; 2],
             dc_sum: 0.0,
             dc_count: 0,
-            rms_sum: 0.0,
-            rms_count: 0,
-            rms_window_samples: 13230, // 300ms at 44.1kHz; updated on init
+            rms_power: 0.0,
+            rms_alpha: 0.0,
         }
     }
 
     pub fn initialize(&mut self, sample_rate: f32) {
-        self.rms_window_samples = (sample_rate * 0.3) as usize;
+        // Time-constant τ = 300 ms → α = 1 − exp(−1/(τ·fs))
+        self.rms_alpha = 1.0 - (-1.0_f64 / (sample_rate as f64 * 0.3)).exp();
         self.reset();
     }
 
@@ -40,8 +40,7 @@ impl PeakAnalyzer {
         self.prev = [0.0; 2];
         self.dc_sum = 0.0;
         self.dc_count = 0;
-        self.rms_sum = 0.0;
-        self.rms_count = 0;
+        self.rms_power = 0.0;
     }
 
     /// Process one block. `channels` is a slice of per-channel sample slices.
@@ -53,12 +52,11 @@ impl PeakAnalyzer {
         let num_samples = channels[0].len();
 
         for i in 0..num_samples {
-            let mut sum_sq = 0.0f32;
+            let mut sum_sq = 0.0f64;
             for ch in 0..num_channels {
                 let s = channels[ch][i];
                 let abs_s = s.abs();
 
-                // Sample peak
                 if abs_s > self.sample_peak.max(0.0) {
                     self.sample_peak = abs_s;
                 }
@@ -74,18 +72,12 @@ impl PeakAnalyzer {
                 }
                 self.prev[ch] = s;
 
-                // DC and RMS accumulation
                 self.dc_sum += s as f64;
                 self.dc_count += 1;
-                sum_sq += s * s;
+                sum_sq += (s as f64) * (s as f64);
             }
-            self.rms_sum += (sum_sq / num_channels as f32) as f64;
-            self.rms_count += 1;
-            // Slide RMS window
-            if self.rms_count as usize > self.rms_window_samples {
-                self.rms_sum = 0.0;
-                self.rms_count = 0;
-            }
+            let inst_power = sum_sq / num_channels as f64;
+            self.rms_power = self.rms_power * (1.0 - self.rms_alpha) + inst_power * self.rms_alpha;
         }
     }
 
@@ -104,14 +96,10 @@ impl PeakAnalyzer {
     }
 
     pub fn rms_dbfs(&self) -> f32 {
-        if self.rms_count == 0 {
+        if self.rms_power <= 0.0 {
             return f32::NEG_INFINITY;
         }
-        let mean_sq = self.rms_sum / self.rms_count as f64;
-        if mean_sq <= 0.0 {
-            return f32::NEG_INFINITY;
-        }
-        10.0 * (mean_sq.log10() as f32)
+        10.0 * (self.rms_power.log10() as f32)
     }
 
     pub fn dc_offset(&self) -> f32 {

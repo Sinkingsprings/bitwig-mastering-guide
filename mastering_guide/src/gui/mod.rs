@@ -8,7 +8,7 @@ use crate::engine::platforms::platform_for;
 use crate::ipc::Registry;
 use crate::params::{MasteringGuideParams, ModeParam};
 use nih_plug::prelude::*;
-use nih_plug_egui::{create_egui_editor, egui, widgets, EguiState};
+use nih_plug_egui::{create_egui_editor, egui, widgets};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ struct MasterState {
     last_analysis: Option<Instant>,
     auto_analyze: bool,
     show_track_spectrum: bool,
+    show_help: bool,
 }
 
 impl Default for MasterState {
@@ -30,6 +31,7 @@ impl Default for MasterState {
             last_analysis: None,
             auto_analyze: false,
             show_track_spectrum: true,
+            show_help: false,
         }
     }
 }
@@ -42,7 +44,7 @@ pub fn create_editor(
     registry: Option<Arc<Registry>>,
     track_name: String,
 ) -> Option<Box<dyn Editor>> {
-    let egui_state = EguiState::from_size(430, 590);
+    let egui_state = params.editor_state.clone();
     let state: Arc<Mutex<MasterState>> = Arc::new(Mutex::new(MasterState::default()));
 
     create_egui_editor(
@@ -76,7 +78,7 @@ pub fn create_editor(
             }
 
             egui::CentralPanel::default().show(ctx, |ui| {
-                render_header(ui, setter, &params, registry);
+                render_header(ui, setter, &params, registry, state);
                 ui.add_space(2.0);
                 ui.separator();
 
@@ -86,6 +88,20 @@ pub fn create_editor(
                     render_track(ui, &frame);
                 }
             });
+
+            // Floating help window — rendered outside CentralPanel so it overlaps.
+            let mut show_help = state.lock().unwrap_or_else(|p| p.into_inner()).show_help;
+            if show_help {
+                egui::Window::new("Mastering Guide — Help")
+                    .open(&mut show_help)
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_size([400.0, 480.0])
+                    .show(ctx, |ui| {
+                        render_help(ui);
+                    });
+                state.lock().unwrap_or_else(|p| p.into_inner()).show_help = show_help;
+            }
 
             ctx.request_repaint_after(Duration::from_millis(80));
         },
@@ -99,6 +115,7 @@ fn render_header(
     setter: &ParamSetter,
     params: &Arc<MasteringGuideParams>,
     registry: &Option<Arc<Registry>>,
+    state: &Arc<Mutex<MasterState>>,
 ) {
     ui.horizontal(|ui| {
         ui.label(
@@ -108,17 +125,39 @@ fn render_header(
                 .strong(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Help button
+            let help_clicked = ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(" ? ")
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(140, 185, 255)),
+                    )
+                    .min_size(egui::vec2(18.0, 16.0)),
+                )
+                .on_hover_text("Open user guide")
+                .clicked();
+            if help_clicked {
+                let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
+                s.show_help = !s.show_help;
+            }
+
             if let Some(ref reg) = registry {
                 ui.label(
                     egui::RichText::new(format!("#{}", reg.slot_index() + 1))
                         .size(10.0)
                         .color(egui::Color32::from_rgb(80, 80, 90)),
-                );
+                )
+                .on_hover_text("Registry slot index for this instance");
             }
             ui.add(
                 widgets::ParamSlider::for_param(&params.mode, setter)
                     .without_value()
                     .with_width(90.0),
+            )
+            .on_hover_text(
+                "Track: sends analysis data to any Master instance in the session.\n\
+                 Master: collects track data and generates advice.",
             );
         });
     });
@@ -143,10 +182,50 @@ fn render_master(
         .num_columns(4)
         .spacing([4.0, 2.0])
         .show(ui, |ui| {
-            compact_meter(ui, "Int LUFS",  master.lufs_integrated, -24.0, -8.0,  "LUFS");
-            compact_meter(ui, "True Peak", master.true_peak_dbtp,  -6.0,   0.0,  "dBTP");
-            compact_meter(ui, "PLR",       master.plr,              4.0,  20.0,  "LU");
-            compact_meter(ui, "PSR min",   master.psr_min,          4.0,  20.0,  "LU");
+            compact_meter(
+                ui,
+                "Int LUFS",
+                master.lufs_integrated,
+                -24.0,
+                -8.0,
+                "LUFS",
+                "Integrated (long-term) loudness of the master bus.\n\
+                 Streaming targets: Spotify/YouTube −14, Apple Music −16,\n\
+                 Amazon −14, Tidal −14, Broadcast (EBU R128) −23 LUFS.",
+            );
+            compact_meter(
+                ui,
+                "True Peak",
+                master.true_peak_dbtp,
+                -6.0,
+                0.0,
+                "dBTP",
+                "Maximum inter-sample peak level.\n\
+                 Keep below −1.0 dBTP for streaming to prevent clipping\n\
+                 after codec encode/decode. Broadcast limit is −3.0 dBTP.",
+            );
+            compact_meter(
+                ui,
+                "PLR",
+                master.plr,
+                4.0,
+                20.0,
+                "LU",
+                "Peak-to-Loudness Ratio — dynamic headroom between peaks\n\
+                 and integrated loudness. Higher = more dynamic.\n\
+                 Typical range: 8–14 LU for pop/rock, 14+ LU for classical.",
+            );
+            compact_meter(
+                ui,
+                "PSR min",
+                master.psr_min,
+                4.0,
+                20.0,
+                "LU",
+                "Minimum short-term loudness range over the track.\n\
+                 Very low values (< 4 LU) indicate heavy limiting or\n\
+                 excessive compression across the entire program.",
+            );
             ui.end_row();
         });
     ui.add_space(2.0);
@@ -159,7 +238,7 @@ fn render_master(
 
     // Optional track overlay
     let (show_track_spec, track_bands) = {
-        let s = state.lock().unwrap();
+        let s = state.lock().unwrap_or_else(|p| p.into_inner());
         let bands: Vec<(String, [f32; 10])> = s
             .last_tracks
             .iter()
@@ -181,7 +260,7 @@ fn render_master(
 
     // ── Track table ─────────────────────────────────────────────────────
     {
-        let s = state.lock().unwrap();
+        let s = state.lock().unwrap_or_else(|p| p.into_inner());
         let tracks = &s.last_tracks;
         if !tracks.is_empty() {
             section_label(ui, "TRACK READINGS");
@@ -194,12 +273,19 @@ fn render_master(
                         .spacing([6.0, 1.0])
                         .striped(true)
                         .show(ui, |ui| {
-                            for h in &["Track", "LUFS", "Peak", "PLR", "Corr"] {
+                            for (h, tip) in &[
+                                ("Track", "Track instance name"),
+                                ("LUFS",  "Integrated loudness"),
+                                ("Peak",  "True peak level (dBTP)"),
+                                ("PLR",   "Peak-to-Loudness Ratio"),
+                                ("Corr",  "Stereo phase correlation"),
+                            ] {
                                 ui.label(
                                     egui::RichText::new(*h)
                                         .size(9.0)
                                         .color(egui::Color32::from_rgb(90, 90, 100)),
-                                );
+                                )
+                                .on_hover_text(*tip);
                             }
                             ui.end_row();
                             for (name, tf) in tracks {
@@ -239,6 +325,10 @@ fn render_master(
             widgets::ParamSlider::for_param(&params.genre, setter)
                 .without_value()
                 .with_width(100.0),
+        )
+        .on_hover_text(
+            "Target genre for spectral reference curve and advice thresholds.\n\
+             Affects the white line shown on the spectrum chart.",
         );
         ui.add_space(4.0);
         ui.label(dim("Platform"));
@@ -246,6 +336,10 @@ fn render_master(
             widgets::ParamSlider::for_param(&params.platform, setter)
                 .without_value()
                 .with_width(110.0),
+        )
+        .on_hover_text(
+            "Target delivery platform. Sets the loudness normalization\n\
+             target and true peak ceiling used in advice generation.",
         );
     });
 
@@ -258,6 +352,11 @@ fn render_master(
                     .size(11.0)
                     .color(egui::Color32::from_rgb(200, 220, 255)),
             ))
+            .on_hover_text(
+                "Capture current readings from all Track instances and\n\
+                 generate mastering advice. Play from the start first\n\
+                 for accurate integrated loudness.",
+            )
             .clicked();
 
         if analyze_clicked {
@@ -268,21 +367,29 @@ fn render_master(
 
         ui.add_space(8.0);
 
-        let mut auto = state.lock().unwrap().auto_analyze;
-        if ui.checkbox(&mut auto, egui::RichText::new("Auto (5 s)").size(10.0)).changed() {
-            state.lock().unwrap().auto_analyze = auto;
+        let mut auto = state.lock().unwrap_or_else(|p| p.into_inner()).auto_analyze;
+        if ui
+            .checkbox(&mut auto, egui::RichText::new("Auto (5 s)").size(10.0))
+            .on_hover_text("Re-run analysis automatically every 5 seconds while the GUI is open.")
+            .changed()
+        {
+            state.lock().unwrap_or_else(|p| p.into_inner()).auto_analyze = auto;
         }
 
         ui.add_space(8.0);
 
-        let mut show = state.lock().unwrap().show_track_spectrum;
-        if ui.checkbox(&mut show, egui::RichText::new("Track spectrum").size(10.0)).changed() {
-            state.lock().unwrap().show_track_spectrum = show;
+        let mut show = state.lock().unwrap_or_else(|p| p.into_inner()).show_track_spectrum;
+        if ui
+            .checkbox(&mut show, egui::RichText::new("Track spectrum").size(10.0))
+            .on_hover_text("Show or hide individual track spectrum lines overlaid on the master chart.")
+            .changed()
+        {
+            state.lock().unwrap_or_else(|p| p.into_inner()).show_track_spectrum = show;
         }
     });
 
     // Last analysis timestamp
-    if let Some(t) = state.lock().unwrap().last_analysis {
+    if let Some(t) = state.lock().unwrap_or_else(|p| p.into_inner()).last_analysis {
         let secs = t.elapsed().as_secs();
         ui.label(
             egui::RichText::new(format!("Last analyzed {} s ago", secs))
@@ -295,7 +402,7 @@ fn render_master(
     ui.separator();
 
     // ── Advice panel ────────────────────────────────────────────────────
-    let advice = state.lock().unwrap().advice.clone();
+    let advice = state.lock().unwrap_or_else(|p| p.into_inner()).advice.clone();
     if advice.is_empty() {
         ui.add_space(6.0);
         ui.label(
@@ -314,17 +421,16 @@ fn render_master(
 
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
-                        // Severity badge
                         let badge_text = adv.severity_label();
                         ui.label(
                             egui::RichText::new(badge_text)
                                 .size(11.0)
                                 .color(sev_color),
-                        );
+                        )
+                        .on_hover_text(severity_tip(badge_text));
                         ui.label(egui::RichText::new(&adv.title).size(11.0).strong());
                     });
 
-                    // Scope tag
                     let scope_str = match &adv.scope {
                         crate::engine::advice::Scope::MasterBus => "Master Bus".to_string(),
                         crate::engine::advice::Scope::Track(n)  => n.clone(),
@@ -364,13 +470,79 @@ fn render_track(ui: &mut egui::Ui, frame: &TrackFrame) {
         .num_columns(2)
         .spacing([10.0, 2.0])
         .show(ui, |ui| {
-            meter_row(ui, "LUFS Integrated", frame.lufs_integrated, -24.0, -8.0,  "LUFS");
-            meter_row(ui, "LUFS Short-term", frame.lufs_short_term, -24.0, -8.0,  "LUFS");
-            meter_row(ui, "LUFS Momentary",  frame.lufs_momentary,  -24.0, -8.0,  "LUFS");
-            meter_row(ui, "True Peak",        frame.true_peak_dbtp,  -6.0,  0.0,  "dBTP");
-            meter_row(ui, "RMS",              frame.rms_dbfs,       -24.0, -6.0,  "dBFS");
-            meter_row(ui, "PLR",              frame.plr,             4.0,  20.0,  "LU");
-            meter_row(ui, "PSR min",          frame.psr_min,         4.0,  20.0,  "LU");
+            meter_row(
+                ui,
+                "LUFS Integrated",
+                frame.lufs_integrated,
+                -24.0,
+                -8.0,
+                "LUFS",
+                "Long-term average loudness measured over the full playback.\n\
+                 Play from the start for an accurate reading.",
+            );
+            meter_row(
+                ui,
+                "LUFS Short-term",
+                frame.lufs_short_term,
+                -24.0,
+                -8.0,
+                "LUFS",
+                "Average loudness over the last 3 seconds.\n\
+                 Useful for checking loud/quiet section balance.",
+            );
+            meter_row(
+                ui,
+                "LUFS Momentary",
+                frame.lufs_momentary,
+                -24.0,
+                -8.0,
+                "LUFS",
+                "Average loudness over the last 400 ms.\n\
+                 Tracks transient loudness events closely.",
+            );
+            meter_row(
+                ui,
+                "True Peak",
+                frame.true_peak_dbtp,
+                -6.0,
+                0.0,
+                "dBTP",
+                "Maximum inter-sample peak level.\n\
+                 Keep below −1.0 dBTP for streaming to prevent clipping\n\
+                 after codec encode/decode. Broadcast limit is −3.0 dBTP.",
+            );
+            meter_row(
+                ui,
+                "RMS",
+                frame.rms_dbfs,
+                -24.0,
+                -6.0,
+                "dBFS",
+                "Root Mean Square average power level.\n\
+                 Indicates perceived density and energy of the signal.",
+            );
+            meter_row(
+                ui,
+                "PLR",
+                frame.plr,
+                4.0,
+                20.0,
+                "LU",
+                "Peak-to-Loudness Ratio — dynamic headroom between peaks\n\
+                 and integrated loudness. Higher = more dynamic.\n\
+                 Typical range: 8–14 LU for pop/rock, 14+ LU for classical.",
+            );
+            meter_row(
+                ui,
+                "PSR min",
+                frame.psr_min,
+                4.0,
+                20.0,
+                "LU",
+                "Minimum short-term loudness range over the track.\n\
+                 Very low values (< 4 LU) indicate heavy limiting or\n\
+                 excessive compression across the entire program.",
+            );
         });
 
     ui.add_space(4.0);
@@ -386,6 +558,132 @@ fn render_track(ui: &mut egui::Ui, frame: &TrackFrame) {
         .size(10.0)
         .color(egui::Color32::from_rgb(80, 80, 90)),
     );
+}
+
+// ─── Help window ─────────────────────────────────────────────────────────────
+
+fn render_help(ui: &mut egui::Ui) {
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
+
+        help_section(ui, "SETUP");
+        ui.label(dim_help(
+            "1. Add this plugin in Track mode on every track you want to analyze.\n\
+             2. Add one instance in Master mode on the master bus.\n\
+             3. Play your mix from start to finish.\n\
+             4. Press Analyze Now on the master instance.",
+        ));
+
+        ui.add_space(6.0);
+        help_section(ui, "METRICS");
+
+        help_entry(
+            ui,
+            "LUFS Integrated",
+            "Long-term average loudness measured over the full playback. \
+             Streaming platforms normalize to a target, so louder masters \
+             are turned down — aim for the platform target, not maximum.",
+        );
+        help_entry(
+            ui,
+            "LUFS Short-term",
+            "Average loudness over the last 3 seconds. \
+             Compare loud and quiet sections to check balance.",
+        );
+        help_entry(
+            ui,
+            "LUFS Momentary",
+            "Average loudness over the last 400 ms. \
+             Tracks transient events closely.",
+        );
+        help_entry(
+            ui,
+            "True Peak (dBTP)",
+            "Maximum inter-sample peak level. \
+             Codec encode/decode can push peaks higher than the digital ceiling. \
+             Keep below −1.0 dBTP for streaming, −3.0 dBTP for broadcast.",
+        );
+        help_entry(
+            ui,
+            "RMS (dBFS)",
+            "Root Mean Square average power. \
+             Indicates perceived density and energy.",
+        );
+        help_entry(
+            ui,
+            "PLR — Peak-to-Loudness Ratio",
+            "Dynamic headroom between peaks and integrated loudness. \
+             Higher values = more dynamic. Typical: 8–14 LU for pop/rock, \
+             14+ LU for classical or jazz.",
+        );
+        help_entry(
+            ui,
+            "PSR min",
+            "Minimum short-term loudness range across the program. \
+             Values below 4 LU indicate the master is heavily limited \
+             throughout with little dynamic variation.",
+        );
+        help_entry(
+            ui,
+            "Correlation",
+            "Stereo phase relationship. \
+             +1 = mono (fully correlated), 0 = uncorrelated stereo, \
+             −1 = out of phase (will cancel in mono). \
+             Aim for > 0.3 to stay mono-compatible.",
+        );
+
+        ui.add_space(6.0);
+        help_section(ui, "PLATFORM LOUDNESS TARGETS");
+        ui.label(dim_help(
+            "Spotify          −14 LUFS  /  −1.0 dBTP\n\
+             Apple Music      −16 LUFS  /  −1.0 dBTP\n\
+             YouTube          −14 LUFS  /  −1.0 dBTP\n\
+             Amazon Music     −14 LUFS  /  −2.0 dBTP\n\
+             Tidal            −14 LUFS  /  −1.0 dBTP\n\
+             SoundCloud       −14 LUFS  /  −1.0 dBTP\n\
+             Broadcast EBU R128  −23 LUFS  /  −3.0 dBTP",
+        ));
+
+        ui.add_space(6.0);
+        help_section(ui, "ADVICE SEVERITY");
+        ui.label(dim_help(
+            "INFO (green)  — Suggestions worth considering.\n\
+             WARN (yellow) — Notable issues that should be addressed.\n\
+             CRIT (red)    — Problems that will cause audible issues or \
+             rejection on the target platform.",
+        ));
+
+        ui.add_space(6.0);
+        help_section(ui, "WORKFLOW TIPS");
+        ui.label(dim_help(
+            "• Play from the very start for accurate integrated LUFS.\n\
+             • Use Auto (5 s) for a hands-free live update during playback.\n\
+             • Switch Genre/Platform to compare different release contexts.\n\
+             • Track spectrum overlay helps spot frequency clashes between stems.",
+        ));
+    });
+}
+
+fn help_section(ui: &mut egui::Ui, title: &str) {
+    ui.label(
+        egui::RichText::new(title)
+            .size(10.0)
+            .color(egui::Color32::from_rgb(140, 185, 255))
+            .strong(),
+    );
+}
+
+fn help_entry(ui: &mut egui::Ui, label: &str, body: &str) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(label).size(10.0).strong());
+        ui.label(dim_help(&format!("— {}", body)));
+    });
+}
+
+fn dim_help(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(10.0)
+        .color(egui::Color32::from_rgb(170, 170, 180))
 }
 
 // ─── Analysis runner ─────────────────────────────────────────────────────────
@@ -419,10 +717,19 @@ fn run_analysis(
 
 fn correlation_bar(ui: &mut egui::Ui, correlation: f32) {
     ui.horizontal(|ui| {
-        ui.label(dim("Corr"));
+        ui.label(dim("Corr"))
+            .on_hover_text(
+                "Stereo phase correlation. +1 = mono-compatible, 0 = uncorrelated,\n\
+                 −1 = out of phase (will cancel in mono). Aim for > 0.3.",
+            );
         let corr = correlation.clamp(-1.0, 1.0);
         let avail = ui.available_width() - 42.0;
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(avail, 10.0), egui::Sense::hover());
+        let (rect, bar_resp) =
+            ui.allocate_exact_size(egui::vec2(avail, 10.0), egui::Sense::hover());
+        bar_resp.on_hover_text(
+            "Stereo phase correlation. +1 = mono-compatible, 0 = uncorrelated,\n\
+             −1 = out of phase (will cancel in mono). Aim for > 0.3.",
+        );
         if ui.is_rect_visible(rect) {
             let p = ui.painter();
             p.rect_filled(rect, 2.0, egui::Color32::from_rgb(38, 38, 44));
@@ -442,7 +749,15 @@ fn correlation_bar(ui: &mut egui::Ui, correlation: f32) {
     });
 }
 
-fn compact_meter(ui: &mut egui::Ui, label: &str, value: f32, lo: f32, hi: f32, unit: &str) {
+fn compact_meter(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: f32,
+    lo: f32,
+    hi: f32,
+    unit: &str,
+    tooltip: &str,
+) {
     ui.vertical(|ui| {
         ui.label(
             egui::RichText::new(label)
@@ -465,12 +780,22 @@ fn compact_meter(ui: &mut egui::Ui, label: &str, value: f32, lo: f32, hi: f32, u
                 .size(8.0)
                 .color(egui::Color32::from_rgb(70, 70, 80)),
         );
-    });
+    })
+    .response
+    .on_hover_text(tooltip);
 }
 
-fn meter_row(ui: &mut egui::Ui, label: &str, value: f32, lo: f32, hi: f32, unit: &str) {
-    ui.label(dim(label));
-    ui.label(meter_text(value, lo, hi));
+fn meter_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: f32,
+    lo: f32,
+    hi: f32,
+    unit: &str,
+    tooltip: &str,
+) {
+    ui.label(dim(label)).on_hover_text(tooltip);
+    ui.label(meter_text(value, lo, hi)).on_hover_text(tooltip);
     let _ = unit;
     ui.end_row();
 }
@@ -526,6 +851,14 @@ fn corr_rgb(corr: f32) -> (u8, u8, u8) {
         (195, 195, 50)
     } else {
         (60, 175, 65)
+    }
+}
+
+fn severity_tip(label: &str) -> &'static str {
+    match label {
+        "INFO" => "Suggestions worth considering for a better result.",
+        "WARN" => "Notable issues that should be addressed before release.",
+        _      => "Critical problems that will cause audible issues or platform rejection.",
     }
 }
 

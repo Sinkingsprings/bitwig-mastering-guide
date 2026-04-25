@@ -1,4 +1,5 @@
 use nih_plug::prelude::*;
+use nih_plug_egui::EguiState;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Enum)]
@@ -53,6 +54,9 @@ impl std::fmt::Display for PlatformParam {
 
 #[derive(Params)]
 pub struct MasteringGuideParams {
+    #[persist = "editor-state"]
+    pub editor_state: Arc<EguiState>,
+
     #[id = "mode"]
     pub mode: EnumParam<ModeParam>,
 
@@ -85,6 +89,7 @@ impl std::fmt::Display for ModeParam {
 impl MasteringGuideParams {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            editor_state: EguiState::from_size(430, 590),
             mode: EnumParam::new("Mode", ModeParam::Track),
             genre: EnumParam::new("Genre", GenreParam::PopRnB),
             platform: EnumParam::new("Platform", PlatformParam::Spotify),

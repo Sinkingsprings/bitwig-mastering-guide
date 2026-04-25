@@ -17,8 +17,7 @@ pub struct AnalysisState {
     writer: FrameWriter,
     /// Cloneable — the editor can call reader() multiple times safely.
     reader: FrameReader,
-    /// Pre-allocated scratch buffers. Grow on demand, never shrink.
-    /// No heap allocation occurs on the audio thread after warm-up.
+    /// Pre-allocated scratch buffers sized to max_buffer_size in initialize().
     interleaved: Vec<f32>,
     mono: Vec<f32>,
     left_buf: Vec<f32>,
@@ -49,13 +48,23 @@ impl AnalysisState {
         }
     }
 
-    pub fn initialize(&mut self, sample_rate: f32) {
+    /// Returns false if the host provides an unsupported sample rate.
+    pub fn initialize(&mut self, sample_rate: f32, max_buffer_size: usize) -> bool {
         self.sample_rate = sample_rate;
         self.publish_interval = (sample_rate * 0.1) as usize;
-        self.lufs.initialize(sample_rate);
+        if !self.lufs.initialize(sample_rate) {
+            return false;
+        }
         self.peak.initialize(sample_rate);
         self.spectrum.initialize(sample_rate);
         self.stereo.initialize(sample_rate);
+        // Pre-allocate to the host's declared maximum block size so that
+        // process() never allocates on the audio thread.
+        self.interleaved.resize(max_buffer_size * 2, 0.0);
+        self.mono.resize(max_buffer_size, 0.0);
+        self.left_buf.resize(max_buffer_size, 0.0);
+        self.right_buf.resize(max_buffer_size, 0.0);
+        true
     }
 
     pub fn reset(&mut self) {
@@ -74,28 +83,11 @@ impl AnalysisState {
     }
 
     pub fn process(&mut self, buffer: &mut Buffer, _playing: bool) {
-        let num_samples = buffer.samples();
+        let num_samples = buffer.samples().min(self.mono.len());
         if num_samples == 0 {
             return;
         }
 
-        // Grow scratch buffers if the block size increased. After the first few
-        // blocks these are stable — no allocation on the steady-state audio path.
-        if self.interleaved.len() < num_samples * 2 {
-            self.interleaved.resize(num_samples * 2, 0.0);
-        }
-        if self.mono.len() < num_samples {
-            self.mono.resize(num_samples, 0.0);
-        }
-        if self.left_buf.len() < num_samples {
-            self.left_buf.resize(num_samples, 0.0);
-        }
-        if self.right_buf.len() < num_samples {
-            self.right_buf.resize(num_samples, 0.0);
-        }
-
-        // Copy channel data from the buffer into pre-allocated scratch vecs.
-        // buffer.as_slice() → &mut [&mut [f32]], outer index = channel.
         {
             let slice = buffer.as_slice();
             let src_l: &[f32] = slice.first().map(|s| s.as_ref()).unwrap_or(&[]);

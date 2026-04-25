@@ -14,6 +14,11 @@ pub struct SpectrumAnalyzer {
     planner: RealFftPlanner<f32>,
     fft: Option<Arc<dyn realfft::RealToComplex<f32>>>,
     window: Vec<f32>,
+    /// Raw audio samples for overlap-add. Never touched by the FFT, so the
+    /// overlap shift operates on valid audio data even after fft.process()
+    /// destroys input_buf.
+    audio_buf: Vec<f32>,
+    /// Windowed copy fed into the FFT; overwritten by realfft during process().
     input_buf: Vec<f32>,
     output_buf: Vec<Complex<f32>>,
     hop_count: usize,
@@ -31,6 +36,7 @@ impl SpectrumAnalyzer {
             planner: RealFftPlanner::new(),
             fft: None,
             window: Vec::new(),
+            audio_buf: Vec::new(),
             input_buf: Vec::new(),
             output_buf: Vec::new(),
             hop_count: 0,
@@ -45,6 +51,7 @@ impl SpectrumAnalyzer {
         self.sample_rate = sample_rate;
         let fft = self.planner.plan_fft_forward(FFT_SIZE);
         self.window = hann_window(FFT_SIZE);
+        self.audio_buf = vec![0.0; FFT_SIZE];
         self.input_buf = fft.make_input_vec();
         self.output_buf = fft.make_output_vec();
         self.band_bins = compute_band_bins(sample_rate, FFT_SIZE);
@@ -56,6 +63,7 @@ impl SpectrumAnalyzer {
     pub fn reset(&mut self) {
         self.hop_count = 0;
         self.bands_dbfs = [f32::NEG_INFINITY; NUM_BANDS];
+        self.audio_buf.fill(0.0);
         if let Some(ref fft) = self.fft.clone() {
             self.input_buf = fft.make_input_vec();
         }
@@ -68,16 +76,20 @@ impl SpectrumAnalyzer {
         };
         for &s in mono {
             if self.hop_count < FFT_SIZE {
-                self.input_buf[self.hop_count] = s * self.window[self.hop_count];
+                self.audio_buf[self.hop_count] = s;
                 self.hop_count += 1;
             }
             if self.hop_count >= FFT_SIZE {
+                // Apply window into input_buf; audio_buf is preserved for overlap.
+                for i in 0..FFT_SIZE {
+                    self.input_buf[i] = self.audio_buf[i] * self.window[i];
+                }
                 let _ = fft.process(&mut self.input_buf, &mut self.output_buf);
                 self.update_bands();
-                // Overlap: shift buffer by hop_size
-                self.input_buf.copy_within(self.hop_size..FFT_SIZE, 0);
+                // Overlap: shift audio_buf left by hop_size, zero the tail.
+                self.audio_buf.copy_within(self.hop_size..FFT_SIZE, 0);
                 for i in (FFT_SIZE - self.hop_size)..FFT_SIZE {
-                    self.input_buf[i] = 0.0;
+                    self.audio_buf[i] = 0.0;
                 }
                 self.hop_count = FFT_SIZE - self.hop_size;
             }
@@ -85,7 +97,7 @@ impl SpectrumAnalyzer {
     }
 
     fn update_bands(&mut self) {
-        const ALPHA: f32 = 0.1; // EMA smoothing
+        const ALPHA: f32 = 0.1;
         let scale = 2.0 / FFT_SIZE as f32;
         for b in 0..NUM_BANDS {
             let (lo, hi) = self.band_bins[b];

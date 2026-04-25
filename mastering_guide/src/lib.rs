@@ -42,7 +42,9 @@ impl Plugin for MasteringGuide {
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
-        self.analysis.initialize(buffer_config.sample_rate);
+        if !self.analysis.initialize(buffer_config.sample_rate, buffer_config.max_buffer_size as usize) {
+            return false;
+        }
 
         // Claim a registry slot on first activation; re-use on re-activation.
         if self.registry.is_none() {

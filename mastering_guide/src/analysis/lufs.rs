@@ -9,11 +9,15 @@ impl LufsAnalyzer {
         Self { inner: None }
     }
 
-    pub fn initialize(&mut self, sample_rate: f32) {
-        let mut meter = EbuR128::new(2, sample_rate as u32, Mode::all())
-            .expect("Failed to create EbuR128 meter");
-        meter.set_max_history(10_000).ok();
-        self.inner = Some(meter);
+    pub fn initialize(&mut self, sample_rate: f32) -> bool {
+        match EbuR128::new(2, sample_rate as u32, Mode::all()) {
+            Ok(mut meter) => {
+                meter.set_max_history(10_000).ok();
+                self.inner = Some(meter);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     pub fn reset(&mut self) {

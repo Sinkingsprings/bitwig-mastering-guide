@@ -15,7 +15,6 @@ nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["a
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 realfft = "3.3"
 ebur128 = "0.1"
-shared_memory = "0.12"
 crossbeam-queue = "0.3"
 atomic_float = "1.0"
 num-complex = "0.4"

@@ -8,6 +8,8 @@ mod ipc;
 mod params;
 mod plugin;
 
+use ipc::Registry;
+use params::ModeParam;
 use plugin::MasteringGuide;
 
 impl Plugin for MasteringGuide {
@@ -41,6 +43,18 @@ impl Plugin for MasteringGuide {
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         self.analysis.initialize(buffer_config.sample_rate);
+
+        // Claim a registry slot on first activation; re-use on re-activation.
+        if self.registry.is_none() {
+            let mode = if self.params.mode.value() == ModeParam::Master { 1 } else { 0 };
+            let name = format!("Track ?"); // placeholder; refined in first GUI repaint
+            if let Some(reg) = Registry::new(mode, name) {
+                let slot = reg.slot_index();
+                self.track_name = format!("Track {}", slot + 1);
+                self.registry = Some(Arc::new(reg));
+            }
+        }
+
         true
     }
 
@@ -61,8 +75,10 @@ impl Plugin for MasteringGuide {
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let params = self.params.clone();
-        let analysis_data = self.analysis.reader();
-        gui::create_editor(params, analysis_data)
+        let frame_reader = self.analysis.reader();
+        let registry = self.registry.clone();
+        let track_name = self.track_name.clone();
+        gui::create_editor(params, frame_reader, registry, track_name)
     }
 }
 

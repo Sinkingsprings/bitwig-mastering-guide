@@ -1,21 +1,6 @@
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Mode {
-    Track,
-    Master,
-}
-
-impl std::fmt::Display for Mode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Mode::Track => write!(f, "Track"),
-            Mode::Master => write!(f, "Master"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Enum)]
 pub enum GenreParam {
     PopRnB,

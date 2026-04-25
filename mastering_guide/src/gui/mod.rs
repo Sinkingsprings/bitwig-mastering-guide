@@ -315,12 +315,7 @@ fn render_master(
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         // Severity badge
-                        let badge_text = match adv.severity {
-                            crate::engine::advice::Severity::Critical   => "⛔",
-                            crate::engine::advice::Severity::Warning    => "⚠",
-                            crate::engine::advice::Severity::Suggestion => "→",
-                            crate::engine::advice::Severity::Good       => "✓",
-                        };
+                        let badge_text = adv.severity_label();
                         ui.label(
                             egui::RichText::new(badge_text)
                                 .size(11.0)

@@ -5,7 +5,9 @@ use crate::params::GenreParam;
 pub struct GenreCurve {
     pub name: &'static str,
     pub bands_rel: [f32; 10],
+    #[allow(dead_code)]
     pub lufs_target: f32,
+    #[allow(dead_code)]
     pub lufs_range: f32,
     pub plr_min: f32,
     pub psr_min: f32,

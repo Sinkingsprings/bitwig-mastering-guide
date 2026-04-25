@@ -36,10 +36,10 @@ pub struct Advice {
 impl Advice {
     pub fn severity_label(&self) -> &'static str {
         match self.severity {
-            Severity::Critical => "CRITICAL",
-            Severity::Warning => "WARNING",
-            Severity::Suggestion => "SUGGESTION",
-            Severity::Good => "GOOD",
+            Severity::Critical   => "⛔",
+            Severity::Warning    => "⚠",
+            Severity::Suggestion => "→",
+            Severity::Good       => "✓",
         }
     }
 

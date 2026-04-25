@@ -15,9 +15,11 @@ pub struct TrackFrame {
     pub plr: f32,
     pub psr_min: f32,
     pub correlation: f32,
+    #[allow(dead_code)]
     pub stereo_width: f32,
     pub bands_dbfs: [f32; NUM_BANDS],
     pub dc_offset: f32,
+    #[allow(dead_code)]
     pub timestamp_ms: u64,
 }
 

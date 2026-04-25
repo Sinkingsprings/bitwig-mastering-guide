@@ -1,0 +1,28 @@
+[workspace]
+members = [".", "xtask"]
+resolver = "2"
+
+[package]
+name = "mastering_guide"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["assert_process_allocs"] }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+realfft = "3.3"
+ebur128 = "0.1"
+shared_memory = "0.12"
+crossbeam-queue = "0.3"
+atomic_float = "1.0"
+num-complex = "0.4"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+strip = true

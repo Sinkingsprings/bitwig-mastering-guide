@@ -103,7 +103,6 @@ pub fn create_editor(
                 state.lock().unwrap_or_else(|p| p.into_inner()).show_help = show_help;
             }
 
-            ctx.request_repaint_after(Duration::from_millis(80));
         },
     )
 }

@@ -1,6 +1,20 @@
 use nih_plug::prelude::*;
 use std::sync::Arc;
 
+/// Installed once (via std::sync::Once) so multiple plugin instances don't
+/// fight over the hook.
+fn install_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            eprintln!("[MasteringGuide] PANIC: {}", info);
+            eprintln!("[MasteringGuide] panic backtrace:\n{:?}", std::backtrace::Backtrace::capture());
+            default_hook(info);
+        }));
+    });
+}
+
 mod analysis;
 mod engine;
 mod gui;
@@ -41,6 +55,7 @@ impl Plugin for MasteringGuide {
         buffer_config: &BufferConfig,
         context: &mut impl InitContext<Self>,
     ) -> bool {
+        install_panic_hook();
         self.sample_rate = buffer_config.sample_rate;
         if !self.analysis.initialize(buffer_config.sample_rate, buffer_config.max_buffer_size as usize) {
             return false;

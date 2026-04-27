@@ -167,6 +167,7 @@ impl AnalysisState {
                 rms_dbfs:              self.peak.rms_dbfs(),
                 plr,
                 psr_min:               self.dynamics.psr_min,
+                macrodynamics_lu:      self.dynamics.macrodynamics_lu,
                 correlation:           self.stereo.correlation,
                 stereo_width:          self.stereo.stereo_width,
                 bands_dbfs:            self.spectrum.bands_dbfs,

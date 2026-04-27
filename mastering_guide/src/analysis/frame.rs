@@ -18,6 +18,9 @@ pub struct TrackFrame {
     pub rms_dbfs: f32,
     pub plr: f32,
     pub psr_min: f32,
+    /// p95-p5 spread of short-term LUFS over the last ~60 s, in LU. NaN
+    /// until enough history has accumulated.
+    pub macrodynamics_lu: f32,
     pub correlation: f32,
     #[allow(dead_code)]
     pub stereo_width: f32,
@@ -45,6 +48,7 @@ impl Default for TrackFrame {
             rms_dbfs: 0.0,
             plr: 0.0,
             psr_min: 0.0,
+            macrodynamics_lu: f32::NAN,
             correlation: 1.0,
             stereo_width: 0.0,
             bands_dbfs: [f32::NEG_INFINITY; NUM_BANDS],

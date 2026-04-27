@@ -307,6 +307,65 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 .into(),
         });
     }
+
+    // D4/D5: Macrodynamics — p95-p5 spread of short-term LUFS over the last
+    // ~60 s. Distinguishes section-to-section contrast from sample-level
+    // microdynamics (PSR/PLR). Lapatas's "macrodynamics" stage of the
+    // mastering process.
+    let macro_lu = m.macrodynamics_lu;
+    if macro_lu.is_finite() {
+        if macro_lu < 2.0 {
+            out.push(Advice {
+                severity: Severity::Suggestion,
+                category: Category::Dynamics,
+                scope: Scope::MasterBus,
+                title: "Flat section contrast (macrodynamics)".into(),
+                detail: format!(
+                    "Short-term LUFS only varies by {:.1} LU between the quietest \
+                     and loudest sections of the last minute. The arrangement may \
+                     be missing dynamic contrast — verses, choruses and bridges \
+                     are sitting at almost the same level.",
+                    macro_lu
+                ),
+                fix: "Use mix-bus volume automation to drop verses and pre-choruses \
+                      by 1–3 dB rather than relying on bus compression to create \
+                      the lift into the chorus."
+                    .into(),
+            });
+        } else if macro_lu > 12.0 {
+            out.push(Advice {
+                severity: Severity::Warning,
+                category: Category::Dynamics,
+                scope: Scope::MasterBus,
+                title: "Extreme section jumps (macrodynamics)".into(),
+                detail: format!(
+                    "Short-term LUFS varies by {:.1} LU across recent sections. \
+                     Loudness deltas above ~12 LU usually mean automation or \
+                     gain-staging mistakes rather than musical intent — quiet \
+                     sections will be inaudible on streaming services that \
+                     normalise to the loudest segment.",
+                    macro_lu
+                ),
+                fix: "Check master fader automation, sidechain ducking depth and \
+                      any envelopes pulling the mix down hard. Aim for 4–8 LU of \
+                      verse-to-chorus contrast for most modern genres."
+                    .into(),
+            });
+        } else if (4.0..=8.0).contains(&macro_lu) {
+            out.push(Advice {
+                severity: Severity::Good,
+                category: Category::Dynamics,
+                scope: Scope::MasterBus,
+                title: "Healthy section contrast".into(),
+                detail: format!(
+                    "Short-term LUFS spread is {:.1} LU — sections have musical \
+                     contrast without extreme jumps.",
+                    macro_lu
+                ),
+                fix: String::new(),
+            });
+        }
+    }
 }
 
 // ─── Frequency Balance ────────────────────────────────────────────────────────

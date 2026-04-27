@@ -15,11 +15,14 @@ const DB_MAX: f32 = 0.0;
 ///   amber  = 3–6 dB off
 ///   red    = >6 dB off
 ///
-/// A white line connects the genre-reference level for each band.
+/// A white line connects the genre-reference level for each band. If a
+/// `captured_reference` is provided it is drawn as a dashed cyan overlay in
+/// absolute dBFS — the user's own captured snapshot.
 pub fn spectrum_chart(
     ui: &mut egui::Ui,
     bands_dbfs: &[f32; 10],
     genre_rel: &[f32; 10],
+    captured_reference: Option<&[f32; 10]>,
 ) {
     let desired = egui::vec2(ui.available_width(), 96.0);
     let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
@@ -121,6 +124,44 @@ pub fn spectrum_chart(
         }
         for &p in &ref_pts {
             painter.circle_filled(p, 2.5, Color32::WHITE);
+        }
+    }
+
+    // Captured-reference overlay (dashed cyan).
+    if let Some(snap) = captured_reference {
+        let snap_pts: Vec<Pos2> = (0..n)
+            .filter_map(|i| {
+                let db = snap[i];
+                if !db.is_finite() || db < DB_MIN {
+                    return None;
+                }
+                let y = db_to_y(db.clamp(DB_MIN, DB_MAX), chart_y0, chart_h);
+                let x = chart_x0 + (i as f32 + 0.5) * bar_w;
+                Some(Pos2::new(x, y))
+            })
+            .collect();
+        let cyan = Color32::from_rgba_unmultiplied(80, 220, 230, 200);
+        if snap_pts.len() >= 2 {
+            // Dashed look: render every other unit segment along each pair.
+            for pair in snap_pts.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let total_len = (b - a).length();
+                let dash_len = 4.0_f32;
+                let gap_len = 3.0_f32;
+                let step = dash_len + gap_len;
+                let mut t = 0.0_f32;
+                while t < total_len {
+                    let t0 = t / total_len;
+                    let t1 = ((t + dash_len) / total_len).min(1.0);
+                    let p0 = a + (b - a) * t0;
+                    let p1 = a + (b - a) * t1;
+                    painter.line_segment([p0, p1], Stroke::new(1.4, cyan));
+                    t += step;
+                }
+            }
+            for &p in &snap_pts {
+                painter.circle_stroke(p, 2.0, Stroke::new(1.0, cyan));
+            }
         }
     }
 }

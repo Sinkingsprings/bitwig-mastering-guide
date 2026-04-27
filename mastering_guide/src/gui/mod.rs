@@ -21,6 +21,10 @@ struct MasterState {
     auto_analyze: bool,
     show_track_spectrum: bool,
     show_help: bool,
+    /// User-captured master snapshot used as a reference overlay on the
+    /// spectrum chart. Lives for the lifetime of this editor instance — not
+    /// persisted across plugin reloads.
+    reference: Option<TrackFrame>,
 }
 
 impl Default for MasterState {
@@ -32,6 +36,7 @@ impl Default for MasterState {
             auto_analyze: false,
             show_track_spectrum: true,
             show_help: false,
+            reference: None,
         }
     }
 }
@@ -232,8 +237,24 @@ fn render_master(
     ui.add_space(4.0);
 
     // ── Spectrum ────────────────────────────────────────────────────────
-    section_label(ui, "SPECTRUM  (bars = master bus · line = genre ref)");
-    spectrum::spectrum_chart(ui, &master.bands_dbfs, &genre.bands_rel);
+    let ref_bands = state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .reference
+        .as_ref()
+        .map(|r| r.bands_dbfs);
+    let header = if ref_bands.is_some() {
+        "SPECTRUM  (bars · genre · cyan dashed = captured ref)"
+    } else {
+        "SPECTRUM  (bars = master bus · line = genre ref)"
+    };
+    section_label(ui, header);
+    spectrum::spectrum_chart(
+        ui,
+        &master.bands_dbfs,
+        &genre.bands_rel,
+        ref_bands.as_ref(),
+    );
 
     // Optional track overlay
     let (show_track_spec, track_bands) = {
@@ -384,6 +405,38 @@ fn render_master(
             .changed()
         {
             state.lock().unwrap_or_else(|p| p.into_inner()).show_track_spectrum = show;
+        }
+
+        ui.add_space(8.0);
+
+        let has_ref = state.lock().unwrap_or_else(|p| p.into_inner()).reference.is_some();
+        let ref_label = if has_ref { "  Update Ref  " } else { "  Capture Ref  " };
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new(ref_label)
+                    .size(10.0)
+                    .color(egui::Color32::from_rgb(180, 230, 235)),
+            ))
+            .on_hover_text(
+                "Capture the current master spectrum and key metrics as a\n\
+                 reference overlay (cyan dashed line on the chart). Useful\n\
+                 for A/B'ing tweaks against an earlier state of your master.",
+            )
+            .clicked()
+        {
+            state.lock().unwrap_or_else(|p| p.into_inner()).reference = Some(master.clone());
+        }
+        if has_ref
+            && ui
+                .add(egui::Button::new(
+                    egui::RichText::new("  Clear  ")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(180, 180, 180)),
+                ))
+                .on_hover_text("Discard the captured reference snapshot.")
+                .clicked()
+        {
+            state.lock().unwrap_or_else(|p| p.into_inner()).reference = None;
         }
     });
 

@@ -2,3 +2,7 @@ target/
 .qwen/
 *.clap
 Cargo.lock
+
+# external study materials (not project code)
+Plugins To Study/
+Research Materials/

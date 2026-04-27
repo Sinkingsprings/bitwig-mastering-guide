@@ -6,6 +6,7 @@ use crate::engine::evaluator::{EvalContext, evaluate};
 use crate::engine::genres::genre_for;
 use crate::engine::platforms::platform_for;
 use crate::ipc::Registry;
+use crate::ipc::registry::TrackEntry;
 use crate::params::{MasteringGuideParams, ModeParam};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
@@ -16,7 +17,7 @@ use std::time::{Duration, Instant};
 
 struct MasterState {
     advice: Vec<Advice>,
-    last_tracks: Vec<(String, TrackFrame)>,
+    last_tracks: Vec<TrackEntry>,
     last_analysis: Option<Instant>,
     auto_analyze: bool,
     show_track_spectrum: bool,
@@ -64,7 +65,7 @@ pub fn create_editor(
 
             // Write our frame into the process-global registry every repaint.
             if let Some(ref reg) = registry {
-                reg.write(track_name, &frame);
+                reg.write(track_name, params.track_role.value(), &frame);
             }
 
             // Auto-analyze trigger
@@ -90,7 +91,7 @@ pub fn create_editor(
                 if is_master {
                     render_master(ui, setter, &params, &frame, registry, state);
                 } else {
-                    render_track(ui, &frame);
+                    render_track(ui, setter, &params, &frame);
                 }
             });
 
@@ -262,7 +263,7 @@ fn render_master(
         let bands: Vec<(String, [f32; 10])> = s
             .last_tracks
             .iter()
-            .map(|(n, f)| (n.clone(), f.bands_dbfs))
+            .map(|e| (e.name.clone(), e.frame.bands_dbfs))
             .collect();
         (s.show_track_spectrum, bands)
     };
@@ -289,12 +290,13 @@ fn render_master(
                 .max_height(100.0)
                 .show(ui, |ui| {
                     egui::Grid::new("track_table")
-                        .num_columns(5)
+                        .num_columns(6)
                         .spacing([6.0, 1.0])
                         .striped(true)
                         .show(ui, |ui| {
                             for (h, tip) in &[
                                 ("Track", "Track instance name"),
+                                ("Role",  "Mix role (drives role-aware advice rules)"),
                                 ("LUFS",  "Integrated loudness"),
                                 ("Peak",  "True peak level (dBTP)"),
                                 ("PLR",   "Peak-to-Loudness Ratio"),
@@ -308,8 +310,14 @@ fn render_master(
                                 .on_hover_text(*tip);
                             }
                             ui.end_row();
-                            for (name, tf) in tracks {
-                                ui.label(egui::RichText::new(name).size(10.0));
+                            for entry in tracks {
+                                let tf = &entry.frame;
+                                ui.label(egui::RichText::new(&entry.name).size(10.0));
+                                ui.label(
+                                    egui::RichText::new(format!("{}", entry.role))
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(160, 160, 175)),
+                                );
                                 ui.label(meter_text(tf.lufs_integrated, -24.0, -8.0));
                                 ui.label(meter_text(tf.true_peak_dbtp, -6.0, 0.0));
                                 ui.label(meter_text(tf.plr, 4.0, 20.0));
@@ -515,8 +523,28 @@ fn render_master(
 
 // ─── Track view ──────────────────────────────────────────────────────────────
 
-fn render_track(ui: &mut egui::Ui, frame: &TrackFrame) {
+fn render_track(
+    ui: &mut egui::Ui,
+    setter: &ParamSetter,
+    params: &Arc<MasteringGuideParams>,
+    frame: &TrackFrame,
+) {
     ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(dim("Role"));
+        ui.add(
+            widgets::ParamSlider::for_param(&params.track_role, setter)
+                .without_value()
+                .with_width(100.0),
+        )
+        .on_hover_text(
+            "What this track is in the mix. Drives role-aware advice on the\n\
+             master view (e.g. bass-vs-bass-drum collisions, vocal vs harmony\n\
+             masking). Leave on Auto to be excluded from those rules.",
+        );
+    });
+    ui.add_space(2.0);
+    ui.separator();
     section_label(ui, "ANALYSIS");
     egui::Grid::new("track_meters")
         .num_columns(2)

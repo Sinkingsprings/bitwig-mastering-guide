@@ -8,6 +8,7 @@
 /// Linux (Bitwig does not sandbox plugins). No OS-level IPC is required.
 
 use crate::analysis::frame::TrackFrame;
+use crate::params::TrackRole;
 use std::sync::{Mutex, OnceLock};
 
 const MAX_SLOTS: usize = 32;
@@ -20,10 +21,19 @@ fn global() -> &'static Mutex<Vec<Option<TrackSlot>>> {
 #[derive(Clone)]
 struct TrackSlot {
     track_name: String,
+    role: TrackRole,
     frame: TrackFrame,
     /// 0 = Track analyzer, 1 = Master bus
     mode: u8,
     heartbeat_ms: u64,
+}
+
+/// One row in `read_tracks` output: the track's name, role, and latest frame.
+#[derive(Clone)]
+pub struct TrackEntry {
+    pub name: String,
+    pub role: TrackRole,
+    pub frame: TrackFrame,
 }
 
 /// Handle to one claimed slot in the global registry.
@@ -39,6 +49,7 @@ impl Registry {
         let idx = slots.iter().position(|s| s.is_none())?;
         slots[idx] = Some(TrackSlot {
             track_name: name,
+            role: TrackRole::Auto,
             frame: TrackFrame::default(),
             mode,
             heartbeat_ms: 0,
@@ -46,21 +57,22 @@ impl Registry {
         Some(Self { slot_idx: idx })
     }
 
-    /// Write the current analysis frame into our slot.
+    /// Write the current analysis frame plus role into our slot.
     /// Called from the GUI/main thread ~30× per second.
-    pub fn write(&self, name: &str, frame: &TrackFrame) {
+    pub fn write(&self, name: &str, role: TrackRole, frame: &TrackFrame) {
         if let Ok(mut slots) = global().lock() {
             if let Some(Some(ref mut slot)) = slots.get_mut(self.slot_idx) {
                 slot.track_name = name.to_string();
+                slot.role = role;
                 slot.frame = frame.clone();
                 slot.heartbeat_ms = now_ms();
             }
         }
     }
 
-    /// Return all active non-master track frames.
+    /// Return all active non-master track entries.
     /// Slots whose heartbeat is older than 3 s are considered stale and skipped.
-    pub fn read_tracks(&self) -> Vec<(String, TrackFrame)> {
+    pub fn read_tracks(&self) -> Vec<TrackEntry> {
         let now = now_ms();
         let slots = match global().lock() {
             Ok(g) => g,
@@ -70,7 +82,11 @@ impl Registry {
             .iter()
             .filter_map(|s| s.as_ref())
             .filter(|s| s.mode == 0 && now.saturating_sub(s.heartbeat_ms) < 3_000)
-            .map(|s| (s.track_name.clone(), s.frame.clone()))
+            .map(|s| TrackEntry {
+                name: s.track_name.clone(),
+                role: s.role,
+                frame: s.frame.clone(),
+            })
             .collect()
     }
 

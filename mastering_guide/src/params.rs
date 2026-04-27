@@ -27,6 +27,38 @@ impl std::fmt::Display for GenreParam {
     }
 }
 
+/// Role of the track this plugin instance is monitoring. Used by the rule
+/// engine to apply role-aware mix-balance advice (bass-vs-bass-drum
+/// collisions at 80–120 Hz, vocal-vs-harmony masking, etc.). `Auto` is a
+/// placeholder that will be filled by the Gilligan extension in a later
+/// phase by inspecting the Bitwig track name / colour / type; until then
+/// it behaves as "no specific role" and tracks set to Auto are excluded
+/// from role-specific rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum TrackRole {
+    Auto,
+    Vocal,
+    Drums,
+    Bass,
+    Harm,
+    Pad,
+    Fx,
+}
+
+impl std::fmt::Display for TrackRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrackRole::Auto  => write!(f, "Auto"),
+            TrackRole::Vocal => write!(f, "Vocal"),
+            TrackRole::Drums => write!(f, "Drums"),
+            TrackRole::Bass  => write!(f, "Bass"),
+            TrackRole::Harm  => write!(f, "Harmony"),
+            TrackRole::Pad   => write!(f, "Pad"),
+            TrackRole::Fx    => write!(f, "FX"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Enum)]
 pub enum PlatformParam {
     Spotify,
@@ -69,6 +101,11 @@ pub struct MasteringGuideParams {
     /// Slot index in shared memory (0–31). Auto-assigned but user can override.
     #[id = "slot"]
     pub slot_id: IntParam,
+
+    /// What role this track plays in the mix. Drives role-aware advice in
+    /// the rule engine.
+    #[id = "track_role"]
+    pub track_role: EnumParam<TrackRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Enum)]
@@ -101,6 +138,7 @@ impl MasteringGuideParams {
                         v.to_string()
                     }
                 })),
+            track_role: EnumParam::new("Track Role", TrackRole::Auto),
         })
     }
 }

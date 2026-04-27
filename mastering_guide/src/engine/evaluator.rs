@@ -2,10 +2,12 @@ use crate::analysis::frame::TrackFrame;
 use crate::engine::advice::{Advice, Category, Scope, Severity};
 use crate::engine::genres::GenreCurve;
 use crate::engine::platforms::PlatformTarget;
+use crate::ipc::registry::TrackEntry;
+use crate::params::TrackRole;
 
 pub struct EvalContext<'a> {
     pub master: &'a TrackFrame,
-    pub tracks: &'a [(String, TrackFrame)],
+    pub tracks: &'a [TrackEntry],
     pub genre: &'a GenreCurve,
     pub platform: &'a PlatformTarget,
 }
@@ -51,7 +53,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
     }
 
     // T2: Digital clipping
-    for (name, track) in ctx.tracks {
+    for TrackEntry { name, frame: track, .. } in ctx.tracks {
         if track.sample_peak_dbfs >= -0.1 {
             out.push(Advice {
                 severity: Severity::Critical,
@@ -108,7 +110,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
     }
 
     // T4: DC offset
-    for (name, track) in ctx.tracks {
+    for TrackEntry { name, frame: track, .. } in ctx.tracks {
         if track.dc_offset.abs() > 0.001 {
             out.push(Advice {
                 severity: Severity::Warning,
@@ -210,7 +212,7 @@ fn evaluate_loudness(ctx: &EvalContext, out: &mut Vec<Advice>) {
 
     // L4: Individual track loudness outlier
     if m.lufs_integrated.is_finite() {
-        for (name, track) in ctx.tracks {
+        for TrackEntry { name, frame: track, .. } in ctx.tracks {
             if track.lufs_integrated.is_finite()
                 && track.lufs_integrated > m.lufs_integrated + 6.0
             {
@@ -734,8 +736,8 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
     let bass_heavy: Vec<&str> = ctx
         .tracks
         .iter()
-        .filter(|(_, t)| t.bands_dbfs[1] > -20.0)
-        .map(|(n, _)| n.as_str())
+        .filter(|e| e.frame.bands_dbfs[1] > -20.0)
+        .map(|e| e.name.as_str())
         .collect();
     if bass_heavy.len() >= 3 {
         out.push(Advice {
@@ -762,8 +764,8 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
         let dominant: Vec<(&str, f32)> = ctx
             .tracks
             .iter()
-            .filter(|(_, t)| t.bands_dbfs[band_idx] > -30.0)
-            .map(|(n, t)| (n.as_str(), t.bands_dbfs[band_idx]))
+            .filter(|e| e.frame.bands_dbfs[band_idx] > -30.0)
+            .map(|e| (e.name.as_str(), e.frame.bands_dbfs[band_idx]))
             .collect();
         if dominant.len() >= 2 {
             let max = dominant.iter().map(|&(_, v)| v).fold(f32::NEG_INFINITY, f32::max);
@@ -793,5 +795,96 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 break; // One masking suggestion per analysis is enough
             }
         }
+    }
+
+    // ── Role-aware rules (skip tracks tagged Auto — undecided role). ────
+    let by_role = |role: TrackRole| -> Vec<&TrackEntry> {
+        ctx.tracks.iter().filter(|e| e.role == role).collect()
+    };
+
+    let bass_tracks = by_role(TrackRole::Bass);
+    let drum_tracks = by_role(TrackRole::Drums);
+    let vocal_tracks = by_role(TrackRole::Vocal);
+    let harm_tracks = by_role(TrackRole::Harm);
+
+    // M3: Bass vs bass-drum collision in 63–125 Hz. Lapatas's canonical
+    // example — bass drum lives at 80–120 Hz, bass guitar at 80–300 Hz, both
+    // need careful EQ pocketing or one will hide the other. Bands 1 (63 Hz)
+    // and 2 (125 Hz) cover this overlap.
+    if !bass_tracks.is_empty() && !drum_tracks.is_empty() {
+        for band_idx in 1..=2 {
+            let any_bass_loud = bass_tracks.iter().any(|e| e.frame.bands_dbfs[band_idx] > -25.0);
+            let any_drum_loud = drum_tracks.iter().any(|e| e.frame.bands_dbfs[band_idx] > -25.0);
+            if any_bass_loud && any_drum_loud {
+                out.push(Advice {
+                    severity: Severity::Suggestion,
+                    category: Category::MixBalance,
+                    scope: Scope::AllTracks,
+                    title: format!("Bass and drums overlap at {}", band_names[band_idx]),
+                    detail: format!(
+                        "Both the bass and the drums have strong energy in the {} \
+                         band. This is the classic kick-vs-bass collision and is \
+                         the single most common cause of a muddy low end.",
+                        band_names[band_idx]
+                    ),
+                    fix: "Pick which instrument owns this band and pocket the other \
+                          out of it: e.g. cut 100 Hz on the bass to let the kick \
+                          through, then boost 60 Hz on the bass for fundamental. \
+                          Sidechaining the bass to the kick can also work."
+                        .into(),
+                });
+                break;
+            }
+        }
+    }
+
+    // M4: Vocal vs harmony masking in the 500 Hz – 2 kHz body range. Lead
+    // vocals need clarity in the 1–3 kHz presence range; harmonies sitting
+    // on the same frequencies will rob the lead of definition.
+    if !vocal_tracks.is_empty() && !harm_tracks.is_empty() {
+        let vocal_loud_in = |idx: usize| vocal_tracks.iter().any(|e| e.frame.bands_dbfs[idx] > -25.0);
+        let harm_loud_in = |idx: usize| harm_tracks.iter().any(|e| e.frame.bands_dbfs[idx] > -25.0);
+        // band 5 = 1 kHz, band 6 = 2 kHz — the vocal presence region.
+        if (vocal_loud_in(5) && harm_loud_in(5)) || (vocal_loud_in(6) && harm_loud_in(6)) {
+            out.push(Advice {
+                severity: Severity::Suggestion,
+                category: Category::MixBalance,
+                scope: Scope::AllTracks,
+                title: "Lead vocal and harmonies share the presence band".into(),
+                detail: "Lead vocal and harmony tracks are both energetic in the \
+                         1–2 kHz range. Listeners place vocals at the front of the \
+                         mix using this band — when harmonies share it, the lead \
+                         loses definition.".into(),
+                fix: "Apply a gentle 2–3 dB cut on harmonies around 2–3 kHz, or \
+                      side-chain a dynamic EQ on the harmonies that ducks when the \
+                      lead vocal is present. Keep harmonies wider in the stereo \
+                      field so they read as 'around' the lead, not 'on top of' it."
+                    .into(),
+            });
+        }
+    }
+
+    // M5: Multiple Bass-role tracks. Phase / level competition is hard to
+    // manage with two simultaneous bass instruments unless they're EQ-split
+    // (e.g. sub-bass + mid-bass).
+    if bass_tracks.len() >= 2 {
+        let names: Vec<&str> = bass_tracks.iter().map(|e| e.name.as_str()).collect();
+        out.push(Advice {
+            severity: Severity::Suggestion,
+            category: Category::MixBalance,
+            scope: Scope::AllTracks,
+            title: "Multiple bass tracks".into(),
+            detail: format!(
+                "{} tracks are tagged Bass: {}. Stacked bass instruments without \
+                 frequency separation usually fight each other and produce phase \
+                 cancellation in the low end.",
+                bass_tracks.len(),
+                names.join(", ")
+            ),
+            fix: "Split the spectrum: one bass owns sub (below ~80 Hz, near-mono), \
+                  the other owns mid-bass (80–250 Hz). Use complementary high-pass \
+                  / low-pass filters and check phase relationship between them."
+                .into(),
+        });
     }
 }

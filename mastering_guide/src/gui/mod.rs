@@ -157,8 +157,7 @@ fn render_header(
             }
             ui.add(
                 widgets::ParamSlider::for_param(&params.mode, setter)
-                    .without_value()
-                    .with_width(90.0),
+                    .with_width(120.0),
             )
             .on_hover_text(
                 "Track: sends analysis data to any Master instance in the session.\n\
@@ -351,8 +350,7 @@ fn render_master(
         ui.label(dim("Genre"));
         ui.add(
             widgets::ParamSlider::for_param(&params.genre, setter)
-                .without_value()
-                .with_width(100.0),
+                .with_width(140.0),
         )
         .on_hover_text(
             "Target genre for spectral reference curve and advice thresholds.\n\
@@ -362,8 +360,7 @@ fn render_master(
         ui.label(dim("Platform"));
         ui.add(
             widgets::ParamSlider::for_param(&params.platform, setter)
-                .without_value()
-                .with_width(110.0),
+                .with_width(150.0),
         )
         .on_hover_text(
             "Target delivery platform. Sets the loudness normalization\n\
@@ -534,8 +531,7 @@ fn render_track(
         ui.label(dim("Role"));
         ui.add(
             widgets::ParamSlider::for_param(&params.track_role, setter)
-                .without_value()
-                .with_width(100.0),
+                .with_width(140.0),
         )
         .on_hover_text(
             "What this track is in the mix. Drives role-aware advice on the\n\

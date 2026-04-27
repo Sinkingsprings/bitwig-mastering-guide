@@ -447,6 +447,59 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: String::new(),
         });
     }
+
+    // F8: Spectral tilt out of range. A typical professional master sits
+    // around -3 to -5 dB/oct (close to pink-noise slope). Flatter than -2 is
+    // usually harsh; steeper than -7 is dull/muffled.
+    let tilt = ctx.master.spectral_tilt_db_per_oct;
+    if tilt.is_finite() && ctx.master.lufs_integrated.is_finite() {
+        if tilt > -1.5 {
+            out.push(Advice {
+                severity: Severity::Warning,
+                category: Category::FrequencyBalance,
+                scope: Scope::MasterBus,
+                title: "Spectral tilt too flat / bright".into(),
+                detail: format!(
+                    "Master spectrum slopes at {:+.1} dB/oct. A balanced master \
+                     typically sits around -3 to -5 dB/oct (pink-noise slope). \
+                     A flatter spectrum tends to sound harsh and fatiguing.",
+                    tilt
+                ),
+                fix: "Apply a gentle high-shelf cut of 1–2 dB above 6 kHz, or \
+                      a Baxandall-style tilt EQ pulling the top down by ~1 dB."
+                    .into(),
+            });
+        } else if tilt < -7.0 {
+            out.push(Advice {
+                severity: Severity::Warning,
+                category: Category::FrequencyBalance,
+                scope: Scope::MasterBus,
+                title: "Spectral tilt too dark".into(),
+                detail: format!(
+                    "Master spectrum slopes at {:+.1} dB/oct. A balanced master \
+                     typically sits around -3 to -5 dB/oct. A steeper roll-off \
+                     leaves the mix sounding muffled or veiled on consumer playback.",
+                    tilt
+                ),
+                fix: "Apply a 1–2 dB high-shelf boost above 6–8 kHz, or pull \
+                      down 200–400 Hz by 1–2 dB to reveal the top end."
+                    .into(),
+            });
+        } else if (-5.0..=-2.5).contains(&tilt) {
+            out.push(Advice {
+                severity: Severity::Good,
+                category: Category::FrequencyBalance,
+                scope: Scope::MasterBus,
+                title: "Healthy spectral tilt".into(),
+                detail: format!(
+                    "Master tilt is {:+.1} dB/oct — close to the pink-noise \
+                     reference slope expected of professional masters.",
+                    tilt
+                ),
+                fix: String::new(),
+            });
+        }
+    }
 }
 
 // ─── Stereo ───────────────────────────────────────────────────────────────────
@@ -514,6 +567,97 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 "Stereo correlation is {:.2} — a well-balanced stereo image that translates \
                  well to both stereo and mono playback.",
                 corr
+            ),
+            fix: String::new(),
+        });
+    }
+
+    // S5: True mono-compatibility loss in LU. Compares stereo-integrated
+    // LUFS with the integrated LUFS of the (L+R)/2 summed signal — this is a
+    // direct measure of how much loudness disappears when the mix is folded
+    // to mono, which is what phone speakers and many club PAs actually do.
+    if m.lufs_integrated.is_finite()
+        && m.lufs_integrated_mono.is_finite()
+        && m.lufs_integrated > -60.0
+    {
+        let mono_loss = m.lufs_integrated - m.lufs_integrated_mono;
+        if mono_loss > 4.0 {
+            out.push(Advice {
+                severity: Severity::Critical,
+                category: Category::Stereo,
+                scope: Scope::MasterBus,
+                title: "Severe loudness loss in mono".into(),
+                detail: format!(
+                    "Mono-summed loudness is {:.1} LU below the stereo loudness — \
+                     significant content is cancelling when summed to mono. Phone \
+                     speakers, many laptops, and most club PA systems will sound \
+                     dramatically thinner than your stereo monitors.",
+                    mono_loss
+                ),
+                fix: "Solo each track and listen in mono using a Utility plugin set \
+                      to sum L+R. Look for stereo wideners, M/S processors, or \
+                      out-of-phase reverbs on the most affected tracks and reduce \
+                      their width."
+                    .into(),
+            });
+        } else if mono_loss > 2.0 {
+            out.push(Advice {
+                severity: Severity::Warning,
+                category: Category::Stereo,
+                scope: Scope::MasterBus,
+                title: "Mono compatibility loss".into(),
+                detail: format!(
+                    "Mono-summed loudness is {:.1} LU below the stereo integrated \
+                     loudness. Listeners on phones and mono playback systems will \
+                     hear a noticeably weaker mix.",
+                    mono_loss
+                ),
+                fix: "Check the spread on stereo wideners and any reverbs that have \
+                      a width control. Aim for mono loss under 2 LU."
+                    .into(),
+            });
+        }
+    }
+
+    // S6: Bass too wide. Lapatas: keep bass near-mono — low-frequency stereo
+    // content collapses badly on small speakers and wastes limiter headroom.
+    // Flags low correlation in the 31 Hz or 63 Hz band when that band has
+    // audible energy.
+    let sub_corr = m.bands_corr[0];
+    let bass_corr = m.bands_corr[1];
+    let bass_db = m.bands_dbfs[1];
+    let worst_corr = sub_corr.min(bass_corr);
+    let bass_audible = bass_db.is_finite() && bass_db > -40.0;
+    if bass_audible && worst_corr < 0.5 {
+        let band_name = if sub_corr < bass_corr { "31 Hz" } else { "63 Hz" };
+        out.push(Advice {
+            severity: if worst_corr < 0.0 { Severity::Critical } else { Severity::Warning },
+            category: Category::Stereo,
+            scope: Scope::MasterBus,
+            title: "Bass too wide for safe mono playback".into(),
+            detail: format!(
+                "Per-band correlation at {band_name} is {:.2} — the low end is \
+                 substantially out of phase between channels. Low frequencies \
+                 should sit close to mono; wide bass collapses on phone speakers \
+                 and forces the limiter to chase phantom peaks.",
+                worst_corr
+            ),
+            fix: "Apply a stereo-narrowing or 'mono below 120 Hz' filter on the \
+                  master bus, or check individual bass / sub tracks for stereo \
+                  wideners and out-of-phase doubling. Bitwig's Mid-Side Split \
+                  device followed by a high-pass on the side channel is a clean \
+                  way to do this."
+                .into(),
+        });
+    } else if bass_audible && worst_corr >= 0.85 {
+        out.push(Advice {
+            severity: Severity::Good,
+            category: Category::Stereo,
+            scope: Scope::MasterBus,
+            title: "Bass is well-centred".into(),
+            detail: format!(
+                "Low-band correlation is {:.2} — the bass is solidly mono-compatible.",
+                worst_corr
             ),
             fix: String::new(),
         });

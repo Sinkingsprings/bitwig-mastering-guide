@@ -8,10 +8,16 @@ pub mod stereo;
 use frame::{FrameReader, FrameWriter, TrackFrame, frame_channel};
 use nih_plug::prelude::Buffer;
 
+use crate::analysis::frame::NUM_BANDS;
+
 pub struct AnalysisState {
     lufs: lufs::LufsAnalyzer,
     peak: peak::PeakAnalyzer,
+    /// FFT of the mid signal (L+R)/2.
     spectrum: spectrum::SpectrumAnalyzer,
+    /// FFT of the side signal (L-R)/2 — used together with the mid spectrum
+    /// to derive a per-band correlation in [-1, 1].
+    spectrum_side: spectrum::SpectrumAnalyzer,
     stereo: stereo::StereoAnalyzer,
     dynamics: dynamics::DynamicsAnalyzer,
     writer: FrameWriter,
@@ -20,6 +26,7 @@ pub struct AnalysisState {
     /// Pre-allocated scratch buffers sized to max_buffer_size in initialize().
     interleaved: Vec<f32>,
     mono: Vec<f32>,
+    side: Vec<f32>,
     left_buf: Vec<f32>,
     right_buf: Vec<f32>,
     sample_rate: f32,
@@ -34,12 +41,14 @@ impl AnalysisState {
             lufs: lufs::LufsAnalyzer::new(),
             peak: peak::PeakAnalyzer::new(),
             spectrum: spectrum::SpectrumAnalyzer::new(),
+            spectrum_side: spectrum::SpectrumAnalyzer::new(),
             stereo: stereo::StereoAnalyzer::new(),
             dynamics: dynamics::DynamicsAnalyzer::new(),
             writer,
             reader,
             interleaved: Vec::new(),
             mono: Vec::new(),
+            side: Vec::new(),
             left_buf: Vec::new(),
             right_buf: Vec::new(),
             sample_rate: 44100.0,
@@ -57,11 +66,13 @@ impl AnalysisState {
         }
         self.peak.initialize(sample_rate);
         self.spectrum.initialize(sample_rate);
+        self.spectrum_side.initialize(sample_rate);
         self.stereo.initialize(sample_rate);
         // Pre-allocate to the host's declared maximum block size so that
         // process() never allocates on the audio thread.
         self.interleaved.resize(max_buffer_size * 2, 0.0);
         self.mono.resize(max_buffer_size, 0.0);
+        self.side.resize(max_buffer_size, 0.0);
         self.left_buf.resize(max_buffer_size, 0.0);
         self.right_buf.resize(max_buffer_size, 0.0);
         true
@@ -71,6 +82,7 @@ impl AnalysisState {
         self.lufs.reset();
         self.peak.reset();
         self.spectrum.reset();
+        self.spectrum_side.reset();
         self.stereo.reset();
         self.dynamics.reset();
         self.publish_counter = 0;
@@ -101,15 +113,18 @@ impl AnalysisState {
                 self.interleaved[i * 2]     = src_l[i];
                 self.interleaved[i * 2 + 1] = src_r[i];
                 self.mono[i]                = (src_l[i] + src_r[i]) * 0.5;
+                self.side[i]                = (src_l[i] - src_r[i]) * 0.5;
             }
         }
 
         self.lufs.process_interleaved(&self.interleaved[..num_samples * 2]);
+        self.lufs.process_mono(&self.mono[..num_samples]);
         self.peak.process(&[
             &self.left_buf[..num_samples],
             &self.right_buf[..num_samples],
         ]);
         self.spectrum.process_mono(&self.mono[..num_samples]);
+        self.spectrum_side.process_mono(&self.side[..num_samples]);
         self.stereo.process(
             &self.left_buf[..num_samples],
             &self.right_buf[..num_samples],
@@ -126,20 +141,39 @@ impl AnalysisState {
             let integrated = self.lufs.integrated_lufs();
             let plr        = dynamics::compute_plr(true_peak, integrated);
 
+            // Per-band correlation from mid/side band powers:
+            //   corr = (P_mid - P_side) / (P_mid + P_side)
+            // Silent bands (both powers ~0) collapse to 1.0 (mono).
+            let mut bands_corr = [1.0_f32; NUM_BANDS];
+            for i in 0..NUM_BANDS {
+                let m = self.spectrum.bands_power_linear[i];
+                let s = self.spectrum_side.bands_power_linear[i];
+                let total = m + s;
+                if total > 1e-10 {
+                    bands_corr[i] = ((m - s) / total).clamp(-1.0, 1.0);
+                }
+            }
+
+            let spectral_tilt_db_per_oct =
+                spectrum::band_slope_db_per_oct(&self.spectrum.bands_dbfs, -90.0);
+
             let frame = TrackFrame {
-                lufs_momentary:   self.lufs.momentary_lufs(),
-                lufs_short_term:  short_term,
-                lufs_integrated:  integrated,
-                true_peak_dbtp:   true_peak,
-                sample_peak_dbfs: self.peak.sample_peak_dbfs(),
-                rms_dbfs:         self.peak.rms_dbfs(),
+                lufs_momentary:        self.lufs.momentary_lufs(),
+                lufs_short_term:       short_term,
+                lufs_integrated:       integrated,
+                lufs_integrated_mono:  self.lufs.integrated_lufs_mono(),
+                true_peak_dbtp:        true_peak,
+                sample_peak_dbfs:      self.peak.sample_peak_dbfs(),
+                rms_dbfs:              self.peak.rms_dbfs(),
                 plr,
-                psr_min:          self.dynamics.psr_min,
-                correlation:      self.stereo.correlation,
-                stereo_width:     self.stereo.stereo_width,
-                bands_dbfs:       self.spectrum.bands_dbfs,
-                dc_offset:        self.peak.dc_offset(),
-                timestamp_ms:     timestamp_ms(),
+                psr_min:               self.dynamics.psr_min,
+                correlation:           self.stereo.correlation,
+                stereo_width:          self.stereo.stereo_width,
+                bands_dbfs:            self.spectrum.bands_dbfs,
+                bands_corr,
+                spectral_tilt_db_per_oct,
+                dc_offset:             self.peak.dc_offset(),
+                timestamp_ms:          timestamp_ms(),
             };
 
             self.writer.update(frame);

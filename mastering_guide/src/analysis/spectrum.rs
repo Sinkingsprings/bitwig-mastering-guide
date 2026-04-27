@@ -26,6 +26,10 @@ pub struct SpectrumAnalyzer {
     sample_rate: f32,
     /// Smoothed band energies (exponential moving average)
     pub bands_dbfs: [f32; NUM_BANDS],
+    /// Same band energies in linear power, smoothed in lockstep with the dB
+    /// values. Exposed so the audio thread can compute mid/side band ratios
+    /// without round-tripping through dB.
+    pub bands_power_linear: [f32; NUM_BANDS],
     /// Bin ranges per band
     band_bins: [(usize, usize); NUM_BANDS],
 }
@@ -43,6 +47,7 @@ impl SpectrumAnalyzer {
             hop_size: FFT_SIZE / 2,
             sample_rate: 44100.0,
             bands_dbfs: [f32::NEG_INFINITY; NUM_BANDS],
+            bands_power_linear: [0.0; NUM_BANDS],
             band_bins: [(0, 0); NUM_BANDS],
         }
     }
@@ -63,6 +68,7 @@ impl SpectrumAnalyzer {
     pub fn reset(&mut self) {
         self.hop_count = 0;
         self.bands_dbfs = [f32::NEG_INFINITY; NUM_BANDS];
+        self.bands_power_linear = [0.0; NUM_BANDS];
         self.audio_buf.fill(0.0);
         if let Some(ref fft) = self.fft.clone() {
             self.input_buf = fft.make_input_vec();
@@ -119,11 +125,47 @@ impl SpectrumAnalyzer {
             };
             if self.bands_dbfs[b] <= -119.0 {
                 self.bands_dbfs[b] = db;
+                self.bands_power_linear[b] = power;
             } else {
                 self.bands_dbfs[b] = self.bands_dbfs[b] * (1.0 - ALPHA) + db * ALPHA;
+                self.bands_power_linear[b] =
+                    self.bands_power_linear[b] * (1.0 - ALPHA) + power * ALPHA;
             }
         }
     }
+}
+
+/// Linear regression of `bands` (dB) over octave index. Bands are octave-spaced
+/// so x = 0..NUM_BANDS gives a slope in dB per octave. Bands at or below
+/// `silence_floor_db` are excluded so silent low frequencies do not skew the
+/// result. Returns 0.0 if fewer than 3 bands have usable energy.
+pub fn band_slope_db_per_oct(bands: &[f32; NUM_BANDS], silence_floor_db: f32) -> f32 {
+    let mut count = 0u32;
+    let mut sum_x = 0.0_f64;
+    let mut sum_y = 0.0_f64;
+    let mut sum_xy = 0.0_f64;
+    let mut sum_xx = 0.0_f64;
+    for (i, &y) in bands.iter().enumerate() {
+        if y.is_finite() && y > silence_floor_db {
+            let x = i as f64;
+            let yf = y as f64;
+            sum_x += x;
+            sum_y += yf;
+            sum_xy += x * yf;
+            sum_xx += x * x;
+            count += 1;
+        }
+    }
+    if count < 3 {
+        return 0.0;
+    }
+    let n = count as f64;
+    let denom = n * sum_xx - sum_x * sum_x;
+    if denom.abs() < 1e-9 {
+        return 0.0;
+    }
+    let slope = (n * sum_xy - sum_x * sum_y) / denom;
+    slope as f32
 }
 
 fn hann_window(size: usize) -> Vec<f32> {

@@ -1,3 +1,4 @@
+use crate::gui::{BASE_HEIGHT, BASE_WIDTH};
 use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
 use std::sync::Arc;
@@ -59,6 +60,41 @@ impl std::fmt::Display for TrackRole {
     }
 }
 
+/// User-facing UI scale. Multiplies both `ctx.set_zoom_factor` and the
+/// requested window size, so the whole editor scales as one unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum UiScale {
+    Pct75,
+    Pct100,
+    Pct125,
+    Pct150,
+    Pct200,
+}
+
+impl UiScale {
+    pub fn factor(self) -> f32 {
+        match self {
+            UiScale::Pct75  => 0.75,
+            UiScale::Pct100 => 1.00,
+            UiScale::Pct125 => 1.25,
+            UiScale::Pct150 => 1.50,
+            UiScale::Pct200 => 2.00,
+        }
+    }
+}
+
+impl std::fmt::Display for UiScale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UiScale::Pct75  => write!(f, "75%"),
+            UiScale::Pct100 => write!(f, "100%"),
+            UiScale::Pct125 => write!(f, "125%"),
+            UiScale::Pct150 => write!(f, "150%"),
+            UiScale::Pct200 => write!(f, "200%"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Enum)]
 pub enum PlatformParam {
     Spotify,
@@ -86,7 +122,12 @@ impl std::fmt::Display for PlatformParam {
 
 #[derive(Params)]
 pub struct MasteringGuideParams {
-    #[persist = "editor-state"]
+    // Intentionally NOT persisted. Earlier UI-scale experiments left some
+    // projects holding a ~230 px width in their saved editor-state blob,
+    // which then overrode the from_size default and clipped the layout.
+    // Re-creating instances does not always shake that loose. Until we
+    // implement a proper user-driven resize that we want to persist, the
+    // window opens fresh at 430 × 590 every time.
     pub editor_state: Arc<EguiState>,
 
     #[id = "mode"]
@@ -106,6 +147,13 @@ pub struct MasteringGuideParams {
     /// the rule engine.
     #[id = "track_role"]
     pub track_role: EnumParam<TrackRole>,
+
+    /// User-facing UI scale. nih_plug_egui forces `pixels_per_point = 1.0`
+    /// on Linux, so on HiDPI displays the editor renders smaller than the
+    /// host UI. This param applies a matching `ctx.set_zoom_factor` and
+    /// resizes the host window so the whole editor scales together.
+    #[id = "ui_scale"]
+    pub ui_scale: EnumParam<UiScale>,
 }
 
 #[derive(Debug, Clone, PartialEq, Enum)]
@@ -126,7 +174,7 @@ impl std::fmt::Display for ModeParam {
 impl MasteringGuideParams {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            editor_state: EguiState::from_size(430, 590),
+            editor_state: EguiState::from_size(BASE_WIDTH, BASE_HEIGHT),
             mode: EnumParam::new("Mode", ModeParam::Track),
             genre: EnumParam::new("Genre", GenreParam::PopRnB),
             platform: EnumParam::new("Platform", PlatformParam::Spotify),
@@ -139,6 +187,7 @@ impl MasteringGuideParams {
                     }
                 })),
             track_role: EnumParam::new("Track Role", TrackRole::Auto),
+            ui_scale: EnumParam::new("UI Scale", UiScale::Pct100),
         })
     }
 }

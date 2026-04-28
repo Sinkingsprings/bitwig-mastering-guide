@@ -13,6 +13,11 @@ use nih_plug_egui::{create_egui_editor, egui, widgets};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Logical (unscaled) base size of the editor window. Kept here so the
+/// initial `from_size` and the on-open resize request use the same numbers.
+pub const BASE_WIDTH: u32 = 430;
+pub const BASE_HEIGHT: u32 = 590;
+
 // ─── Editor state shared across repaints ─────────────────────────────────────
 
 struct MasterState {
@@ -26,6 +31,10 @@ struct MasterState {
     /// spectrum chart. Lives for the lifetime of this editor instance — not
     /// persisted across plugin reloads.
     reference: Option<TrackFrame>,
+    /// Last UI-scale factor we pushed into the egui ctx + the host. We
+    /// only re-apply on change so we don't fire request_resize every frame.
+    /// 0.0 means "not yet applied" and forces the first frame to apply.
+    last_applied_scale: f32,
 }
 
 impl Default for MasterState {
@@ -38,8 +47,16 @@ impl Default for MasterState {
             show_track_spectrum: true,
             show_help: false,
             reference: None,
+            last_applied_scale: 0.0,
         }
     }
+}
+
+fn scaled_size(scale: f32) -> (u32, u32) {
+    (
+        (BASE_WIDTH as f32 * scale).round() as u32,
+        (BASE_HEIGHT as f32 * scale).round() as u32,
+    )
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -52,14 +69,32 @@ pub fn create_editor(
 ) -> Option<Box<dyn Editor>> {
     let egui_state = params.editor_state.clone();
     let state: Arc<Mutex<MasterState>> = Arc::new(Mutex::new(MasterState::default()));
+    let scale_egui_state = egui_state.clone();
 
     create_egui_editor(
         egui_state,
         (frame_reader, registry, state, track_name),
-        |ctx, _| {
+        move |ctx, _| {
             apply_theme(ctx);
         },
         move |ctx, setter, (frame_reader, registry, state, track_name)| {
+            // ── UI scale ────────────────────────────────────────────────
+            // Apply zoom + matching window size whenever the user changes
+            // the UI Scale param (or on the first frame after each open).
+            // `last_applied_scale` is reset to 0.0 in MasterState::default,
+            // so the very first frame after spawn always re-applies — this
+            // also handles hosts (Bitwig) that cache plugin window sizes.
+            {
+                let target_scale = params.ui_scale.value().factor();
+                let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
+                if (s.last_applied_scale - target_scale).abs() > f32::EPSILON {
+                    ctx.set_zoom_factor(target_scale);
+                    let (w, h) = scaled_size(target_scale);
+                    scale_egui_state.set_requested_size(w, h);
+                    s.last_applied_scale = target_scale;
+                }
+            }
+
             let frame = frame_reader.read();
             let is_master = params.mode.value() == ModeParam::Master;
 
@@ -123,12 +158,15 @@ fn render_header(
     state: &Arc<Mutex<MasterState>>,
 ) {
     ui.horizontal(|ui| {
+        // Mode value label on the left — mirrors where MASTERING GUIDE used to live,
+        // giving the header a left anchor so it isn't right-biased.
         ui.label(
-            egui::RichText::new("MASTERING GUIDE")
-                .size(12.0)
+            egui::RichText::new(format!("{}", params.mode.value()))
+                .size(11.0)
                 .color(egui::Color32::from_rgb(140, 185, 255))
                 .strong(),
         );
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Help button
             let help_clicked = ui
@@ -157,7 +195,8 @@ fn render_header(
             }
             ui.add(
                 widgets::ParamSlider::for_param(&params.mode, setter)
-                    .with_width(120.0),
+                    .without_value()
+                    .with_width(70.0),
             )
             .on_hover_text(
                 "Track: sends analysis data to any Master instance in the session.\n\
@@ -346,25 +385,56 @@ fn render_master(
     ui.separator();
 
     // ── Controls ────────────────────────────────────────────────────────
+    let value_color = egui::Color32::from_rgb(180, 200, 230);
     ui.horizontal(|ui| {
         ui.label(dim("Genre"));
         ui.add(
             widgets::ParamSlider::for_param(&params.genre, setter)
-                .with_width(140.0),
+                .without_value()
+                .with_width(80.0),
         )
         .on_hover_text(
             "Target genre for spectral reference curve and advice thresholds.\n\
              Affects the white line shown on the spectrum chart.",
         );
-        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(format!("{}", params.genre.value()))
+                .size(10.0)
+                .color(value_color),
+        );
+    });
+    ui.horizontal(|ui| {
         ui.label(dim("Platform"));
         ui.add(
             widgets::ParamSlider::for_param(&params.platform, setter)
-                .with_width(150.0),
+                .without_value()
+                .with_width(80.0),
         )
         .on_hover_text(
             "Target delivery platform. Sets the loudness normalization\n\
              target and true peak ceiling used in advice generation.",
+        );
+        ui.label(
+            egui::RichText::new(format!("{}", params.platform.value()))
+                .size(10.0)
+                .color(value_color),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(dim("UI Scale"));
+        ui.add(
+            widgets::ParamSlider::for_param(&params.ui_scale, setter)
+                .without_value()
+                .with_width(80.0),
+        )
+        .on_hover_text(
+            "Resize the whole plugin window proportionally.\n\
+             Useful on HiDPI displays where 100% looks small.",
+        );
+        ui.label(
+            egui::RichText::new(format!("{}", params.ui_scale.value()))
+                .size(10.0)
+                .color(value_color),
         );
     });
 
@@ -531,12 +601,35 @@ fn render_track(
         ui.label(dim("Role"));
         ui.add(
             widgets::ParamSlider::for_param(&params.track_role, setter)
-                .with_width(140.0),
+                .without_value()
+                .with_width(80.0),
         )
         .on_hover_text(
             "What this track is in the mix. Drives role-aware advice on the\n\
              master view (e.g. bass-vs-bass-drum collisions, vocal vs harmony\n\
              masking). Leave on Auto to be excluded from those rules.",
+        );
+        ui.label(
+            egui::RichText::new(format!("{}", params.track_role.value()))
+                .size(10.0)
+                .color(egui::Color32::from_rgb(180, 200, 230)),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(dim("UI Scale"));
+        ui.add(
+            widgets::ParamSlider::for_param(&params.ui_scale, setter)
+                .without_value()
+                .with_width(80.0),
+        )
+        .on_hover_text(
+            "Resize the whole plugin window proportionally.\n\
+             Useful on HiDPI displays where 100% looks small.",
+        );
+        ui.label(
+            egui::RichText::new(format!("{}", params.ui_scale.value()))
+                .size(10.0)
+                .color(egui::Color32::from_rgb(180, 200, 230)),
         );
     });
     ui.add_space(2.0);

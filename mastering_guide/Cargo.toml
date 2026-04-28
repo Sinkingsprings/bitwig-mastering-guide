@@ -26,6 +26,21 @@ serde = { version = "1", features = ["derive"] }
 [patch."https://github.com/audio-forge-rs/baseview.git"]
 baseview = { git = "https://github.com/Sinkingsprings/baseview.git", branch = "fix-null-window-crash" }
 
+# Local fork override so we pick up the request_resize stale-size fix
+# without round-tripping through GitHub. Drop this once the fork's master
+# is pushed and Cargo.lock is updated.
+[patch."https://github.com/Sinkingsprings/nih-plug.git"]
+nih_plug = { path = "/home/jim/Desktop/forks/nih-plug" }
+nih_plug_egui = { path = "/home/jim/Desktop/forks/nih-plug/nih_plug_egui" }
+
+# Local fork override that makes ctx.set_zoom_factor actually scale the
+# UI. Upstream egui-baseview passes native (un-zoomed) ppp to both
+# screen_rect computation and tessellation, so set_zoom_factor was a
+# visual no-op. Drop this once the fork is published and Cargo.lock
+# updated.
+[patch."https://github.com/audio-forge-rs/egui-baseview.git"]
+egui-baseview = { path = "/home/jim/Desktop/forks/egui-baseview" }
+
 [profile.release]
 lto = true
 opt-level = 3

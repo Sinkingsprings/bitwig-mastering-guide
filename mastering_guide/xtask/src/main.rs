@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
@@ -23,9 +24,18 @@ fn bundle(args: &[String]) {
 
     let profile = if release { "release" } else { "debug" };
     let src = format!("target/{profile}/libmastering_guide.so");
-    let dst_dir = std::path::PathBuf::from(format!("target/{profile}/bundled"));
+
+    // Staging copy (target/…/bundled/)
+    let dst_dir = PathBuf::from(format!("target/{profile}/bundled"));
     std::fs::create_dir_all(&dst_dir).unwrap();
-    let dst = dst_dir.join("MasteringGuide.clap");
-    std::fs::copy(&src, &dst).expect("Failed to copy .clap file");
-    println!("Bundled: {}", dst.display());
+    let staged = dst_dir.join("MasteringGuide.clap");
+    std::fs::copy(&src, &staged).expect("Failed to copy .clap to bundled/");
+    println!("Bundled:   {}", staged.display());
+
+    // Install to ~/.clap/ so Bitwig picks it up on next scan/restart
+    let install_dir = PathBuf::from(std::env::var("HOME").expect("HOME not set")).join(".clap");
+    std::fs::create_dir_all(&install_dir).unwrap();
+    let installed = install_dir.join("MasteringGuide.clap");
+    std::fs::copy(&src, &installed).expect("Failed to copy .clap to ~/.clap/");
+    println!("Installed: {}", installed.display());
 }

@@ -4,9 +4,13 @@
 /// socket, reads length-prefixed JSON `track_table` messages, and stores the
 /// parsed metadata in an `Arc<Mutex<GilliganState>>` shared with the GUI.
 ///
+/// The GUI thread can push FixAction JSON strings into `GilliganState::outbound`;
+/// the IPC thread drains and sends them to Gilligan on every loop iteration.
+///
 /// The audio thread never touches this module.
 
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
@@ -43,7 +47,6 @@ struct WireTrack {
 /// One row of Gilligan metadata, available to the GUI.
 #[derive(Clone, Debug)]
 pub struct GilliganTrack {
-    /// Bitwig-assigned track index (−1 = master).
     pub idx: i32,
     pub name: String,
     pub track_type: String,
@@ -54,17 +57,21 @@ pub struct GilliganTrack {
     pub vu_r: f32,
 }
 
-/// Shared state written by the IPC thread, read by the GUI thread.
+/// Shared state written by the IPC thread, read (and written to `outbound`)
+/// by the GUI thread.  Both sides hold `Arc<Mutex<GilliganState>>`.
 #[derive(Default)]
 pub struct GilliganState {
     pub tracks: Vec<GilliganTrack>,
     /// True while the IPC thread is connected to Gilligan.
     pub connected: bool,
+    /// FixAction JSON messages queued by the GUI to be sent to Gilligan.
+    /// The IPC thread drains this on every loop and sends length-prefixed.
+    pub outbound: VecDeque<String>,
 }
 
 // ── Client ────────────────────────────────────────────────────────────────────
 
-/// Spawn the background IPC thread.  Returns the shared state handle.
+/// Spawn the background IPC thread.
 /// Call once from `create_editor()` (GUI thread, before the editor opens).
 pub fn spawn(state: Arc<Mutex<GilliganState>>) {
     let user = std::env::var("USER")
@@ -91,10 +98,10 @@ fn client_loop(socket_path: &str, state: Arc<Mutex<GilliganState>>) {
                     let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
                     s.connected = false;
                     s.tracks.clear();
+                    s.outbound.clear();
                 }
             }
             Err(_) => {
-                // Gilligan not running yet — retry after a short pause.
                 thread::sleep(Duration::from_secs(2));
             }
         }
@@ -108,6 +115,18 @@ fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<GilliganState>>) {
 
     let mut header = [0u8; 4];
     loop {
+        // ── Drain outbound queue (GUI-pushed fix actions) ─────────────────
+        let pending: Vec<String> = {
+            let mut s = state.lock().unwrap_or_else(|p| p.into_inner());
+            s.outbound.drain(..).collect()
+        };
+        for json in pending {
+            if write_framed(&mut stream, json.as_bytes()).is_err() {
+                return; // connection lost
+            }
+        }
+
+        // ── Read next inbound message from Gilligan ───────────────────────
         match stream.read_exact(&mut header) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::WouldBlock
@@ -120,7 +139,7 @@ fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<GilliganState>>) {
 
         let body_len = u32::from_be_bytes(header) as usize;
         if body_len == 0 || body_len > 1 << 20 {
-            break; // sanity check
+            break;
         }
 
         let mut body = vec![0u8; body_len];
@@ -149,7 +168,10 @@ fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<GilliganState>>) {
             }
         }
     }
+}
 
-    // Send any queued outbound messages (Phase 12 fix actions) — placeholder.
-    let _ = stream.flush();
+fn write_framed(stream: &mut UnixStream, body: &[u8]) -> io::Result<()> {
+    let len = (body.len() as u32).to_be_bytes();
+    stream.write_all(&len)?;
+    stream.write_all(body)
 }

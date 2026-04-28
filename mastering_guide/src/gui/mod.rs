@@ -648,6 +648,14 @@ fn render_master(
 
     // ── Advice panel ────────────────────────────────────────────────────
     let advice = state.lock().unwrap_or_else(|p| p.into_inner()).advice.clone();
+    let gilligan_connected = state
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .gilligan
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .connected;
+
     if advice.is_empty() {
         ui.add_space(6.0);
         ui.label(
@@ -693,11 +701,50 @@ fn render_master(
                             .color(egui::Color32::from_rgb(190, 190, 200)),
                     );
                     if !adv.fix.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("Fix: {}", adv.fix))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgb(100, 190, 110)),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Fix: {}", adv.fix))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(100, 190, 110)),
+                            );
+
+                            // [Apply] button — only shown when Gilligan is connected
+                            // and this advice has a concrete action.
+                            if let Some(ref action) = adv.action {
+                                if gilligan_connected {
+                                    let desc = action.description();
+                                    if ui
+                                        .add(egui::Button::new(
+                                            egui::RichText::new("Apply")
+                                                .size(9.0)
+                                                .color(egui::Color32::from_rgb(80, 200, 140)),
+                                        ))
+                                        .on_hover_text(format!(
+                                            "Ask Gilligan to execute this fix in Bitwig:\n\
+                                             {desc}\n\n\
+                                             The change will be wrapped in an undo block \
+                                             so you can Ctrl+Z to revert it."
+                                        ))
+                                        .clicked()
+                                    {
+                                        let json = action.to_json_msg();
+                                        let s = state.lock().unwrap_or_else(|p| p.into_inner());
+                                        let mut gs = s.gilligan.lock().unwrap_or_else(|p| p.into_inner());
+                                        gs.outbound.push_back(json);
+                                    }
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("Apply")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(60, 60, 70)),
+                                    )
+                                    .on_hover_text(
+                                        "Connect Gilligan to enable one-click fixes.\n\
+                                         See the ? help guide for setup instructions.",
+                                    );
+                                }
+                            }
+                        });
                     }
                     ui.add_space(2.0);
                     ui.separator();

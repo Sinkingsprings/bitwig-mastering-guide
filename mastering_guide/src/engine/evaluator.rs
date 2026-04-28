@@ -1,5 +1,5 @@
 use crate::analysis::frame::TrackFrame;
-use crate::engine::advice::{Advice, Category, Scope, Severity};
+use crate::engine::advice::{Advice, Category, FixAction, Scope, Severity};
 use crate::engine::genres::GenreCurve;
 use crate::engine::platforms::PlatformTarget;
 use crate::ipc::registry::TrackEntry;
@@ -49,6 +49,10 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 ctx.platform.true_peak_ceil - 0.5,
                 m.true_peak_dbtp - (ctx.platform.true_peak_ceil - 0.5)
             ),
+            action: Some(FixAction::AdjustVolume {
+                track_name: None,
+                delta_db: -(m.true_peak_dbtp - (ctx.platform.true_peak_ceil - 0.5)),
+            }),
         });
     }
 
@@ -67,6 +71,10 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Reduce the fader or insert gain on this track. Add a limiter or clipper \
                       before the master bus send to prevent this from feeding the master chain."
                     .into(),
+                action: Some(FixAction::AdjustVolume {
+                    track_name: Some(name.clone()),
+                    delta_db: -1.0 - track.sample_peak_dbfs,
+                }),
             });
         }
     }
@@ -83,6 +91,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Reduce master bus gain. Check that your limiter is the last plugin in the \
                   master chain and that its ceiling is at 0 dBFS or below."
                 .into(),
+            action: None,
         });
     }
 
@@ -106,6 +115,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Use a true peak limiter (not just a sample peak limiter) with a -1 dBTP \
                   ceiling. Most modern limiters have a 'true peak' mode — enable it."
                 .into(),
+            action: None,
         });
     }
 
@@ -125,6 +135,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Insert a DC filter (high-pass filter at 5–10 Hz) at the start of this \
                       track's FX chain to remove the offset."
                     .into(),
+                action: None,
             });
         }
     }
@@ -144,6 +155,7 @@ fn evaluate_technical(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 m.true_peak_dbtp, ctx.platform.name, ctx.platform.true_peak_ceil
             ),
             fix: String::new(),
+            action: None,
         });
     }
 }
@@ -176,6 +188,10 @@ fn evaluate_loudness(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     "Reduce master bus output gain by {:.1} dB, then re-check true peak.",
                     delta
                 ),
+                action: Some(FixAction::AdjustVolume {
+                    track_name: None,
+                    delta_db: -delta,
+                }),
             });
         } else if delta < -3.0 {
             out.push(Advice {
@@ -194,6 +210,10 @@ fn evaluate_loudness(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     -delta - 0.5,
                     ctx.platform.true_peak_ceil
                 ),
+                action: Some(FixAction::AdjustVolume {
+                    track_name: None,
+                    delta_db: -delta - 0.5,
+                }),
             });
         } else if delta.abs() <= 1.0 {
             out.push(Advice {
@@ -206,6 +226,7 @@ fn evaluate_loudness(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     m.lufs_integrated, ctx.platform.name, target
                 ),
                 fix: String::new(),
+                action: None,
             });
         }
     }
@@ -234,6 +255,10 @@ fn evaluate_loudness(ctx: &EvalContext, out: &mut Vec<Advice>) {
                         (track.lufs_integrated - m.lufs_integrated) * 0.5,
                         track.lufs_integrated - m.lufs_integrated
                     ),
+                    action: Some(FixAction::AdjustVolume {
+                        track_name: Some(name.clone()),
+                        delta_db: -((track.lufs_integrated - m.lufs_integrated) * 0.5),
+                    }),
                 });
             }
         }
@@ -262,6 +287,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                       chorus. Consider a clipper before the limiter to handle peaks transparently, \
                       allowing the limiter to work less hard."
                     .into(),
+                action: None,
             });
         } else if m.psr_min < ctx.genre.psr_min {
             out.push(Advice {
@@ -277,6 +303,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Reduce limiter input gain by 1–2 dB and listen to the loudest section. \
                       The transients and punch should become more audible."
                     .into(),
+                action: None,
             });
         } else if m.psr_min >= ctx.genre.psr_min + 2.0 {
             out.push(Advice {
@@ -289,6 +316,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     m.psr_min, ctx.genre.name
                 ),
                 fix: String::new(),
+                action: None,
             });
         }
     }
@@ -307,6 +335,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Check your master bus compression ratio. A PLR below the genre minimum usually \
                   means a compressor is working too hard before the limiter stage."
                 .into(),
+            action: None,
         });
     }
 
@@ -333,6 +362,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                       by 1–3 dB rather than relying on bus compression to create \
                       the lift into the chorus."
                     .into(),
+                action: None,
             });
         } else if macro_lu > 12.0 {
             out.push(Advice {
@@ -352,6 +382,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                       any envelopes pulling the mix down hard. Aim for 4–8 LU of \
                       verse-to-chorus contrast for most modern genres."
                     .into(),
+                action: None,
             });
         } else if (4.0..=8.0).contains(&macro_lu) {
             out.push(Advice {
@@ -365,6 +396,7 @@ fn evaluate_dynamics(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     macro_lu
                 ),
                 fix: String::new(),
+                action: None,
             });
         }
     }
@@ -410,6 +442,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   the master bus. Then check individual bass/kick tracks — one is likely boosted \
                   in this range."
                 .into(),
+            action: None,
         });
     }
 
@@ -429,6 +462,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   to remove inaudible sub-rumble. This frees headroom and allows the limiter to \
                   work less hard."
                 .into(),
+            action: None,
         });
     }
 
@@ -449,6 +483,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   bell EQ (Q ~1.0). Check which tracks are contributing — often overheads, \
                   guitars, or a poorly EQed vocal."
                 .into(),
+            action: None,
         });
     }
 
@@ -468,6 +503,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Boost 2–3 kHz by 1–2 dB on the master bus. Check whether the vocal track \
                   has sufficient presence boost in its own EQ."
                 .into(),
+            action: None,
         });
     }
 
@@ -487,6 +523,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Apply a high-shelf boost of 1–2 dB at 10 kHz on the master bus. An air-band \
                   EQ (e.g. Neve 33609 style shelf) is ideal for this."
                 .into(),
+            action: None,
         });
     }
 
@@ -506,6 +543,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 max_deviation, ctx.genre.name
             ),
             fix: String::new(),
+            action: None,
         });
     }
 
@@ -529,6 +567,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Apply a gentle high-shelf cut of 1–2 dB above 6 kHz, or \
                       a Baxandall-style tilt EQ pulling the top down by ~1 dB."
                     .into(),
+                action: None,
             });
         } else if tilt < -7.0 {
             out.push(Advice {
@@ -545,6 +584,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Apply a 1–2 dB high-shelf boost above 6–8 kHz, or pull \
                       down 200–400 Hz by 1–2 dB to reveal the top end."
                     .into(),
+                action: None,
             });
         } else if (-5.0..=-2.5).contains(&tilt) {
             out.push(Advice {
@@ -558,6 +598,7 @@ fn evaluate_frequency(ctx: &EvalContext, out: &mut Vec<Advice>) {
                     tilt
                 ),
                 fix: String::new(),
+                action: None,
             });
         }
     }
@@ -586,6 +627,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   a stereo widener set too aggressively, or mid/side processing with incorrect \
                   M/S encoding."
                 .into(),
+            action: None,
         });
     } else if corr < 0.2 {
         out.push(Advice {
@@ -602,6 +644,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   Utility plugin (sum to mono). Identify which elements disappear and reduce \
                   widening on those tracks."
                 .into(),
+            action: None,
         });
     } else if corr > 0.95 {
         out.push(Advice {
@@ -617,6 +660,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
             fix: "Consider adding stereo width to reverb returns, pads, or guitars using subtle \
                   panning or a stereo imager. Keep bass and kick near-mono."
                 .into(),
+            action: None,
         });
     } else if (0.3..=0.7).contains(&corr) {
         out.push(Advice {
@@ -630,6 +674,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 corr
             ),
             fix: String::new(),
+            action: None,
         });
     }
 
@@ -660,6 +705,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                       out-of-phase reverbs on the most affected tracks and reduce \
                       their width."
                     .into(),
+                action: None,
             });
         } else if mono_loss > 2.0 {
             out.push(Advice {
@@ -676,6 +722,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 fix: "Check the spread on stereo wideners and any reverbs that have \
                       a width control. Aim for mono loss under 2 LU."
                     .into(),
+                action: None,
             });
         }
     }
@@ -709,6 +756,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   device followed by a high-pass on the side channel is a clean \
                   way to do this."
                 .into(),
+            action: None,
         });
     } else if bass_audible && worst_corr >= 0.85 {
         out.push(Advice {
@@ -721,6 +769,7 @@ fn evaluate_stereo(ctx: &EvalContext, out: &mut Vec<Advice>) {
                 worst_corr
             ),
             fix: String::new(),
+            action: None,
         });
     }
 }
@@ -755,6 +804,7 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   Only the kick, bass, and possibly a pad should have significant energy below \
                   100 Hz. Use sidechaining or dynamic EQ to duck bass tracks when kick hits."
                 .into(),
+            action: None,
         });
     }
 
@@ -791,6 +841,7 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                          other by the same amount. This creates separation without removing energy.",
                         band_names[band_idx]
                     ),
+                    action: None,
                 });
                 break; // One masking suggestion per analysis is enough
             }
@@ -832,6 +883,7 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                           through, then boost 60 Hz on the bass for fundamental. \
                           Sidechaining the bass to the kick can also work."
                         .into(),
+                    action: None,
                 });
                 break;
             }
@@ -860,6 +912,7 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                       lead vocal is present. Keep harmonies wider in the stereo \
                       field so they read as 'around' the lead, not 'on top of' it."
                     .into(),
+                action: None,
             });
         }
     }
@@ -885,6 +938,7 @@ fn evaluate_mix_balance(ctx: &EvalContext, out: &mut Vec<Advice>) {
                   the other owns mid-bass (80–250 Hz). Use complementary high-pass \
                   / low-pass filters and check phase relationship between them."
                 .into(),
+            action: None,
         });
     }
 }

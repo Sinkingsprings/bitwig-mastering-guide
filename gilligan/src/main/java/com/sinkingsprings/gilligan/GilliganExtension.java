@@ -16,22 +16,25 @@ public class GilliganExtension extends ControllerExtension {
     private MasterTrack masterTrack;
     private IpcServer ipcServer;
 
-    // Per-track state captured by observer callbacks (controller thread).
-    private final String[] names     = new String[MAX_TRACKS];
-    private final String[] types     = new String[MAX_TRACKS];
+    // Per-track state (updated by observer callbacks on the controller thread).
+    private final String[]  names    = new String[MAX_TRACKS];
+    private final String[]  types    = new String[MAX_TRACKS];
     private final boolean[] isGroup  = new boolean[MAX_TRACKS];
-    private final int[]    position  = new int[MAX_TRACKS];
-    private final double[] colorR    = new double[MAX_TRACKS];
-    private final double[] colorG    = new double[MAX_TRACKS];
-    private final double[] colorB    = new double[MAX_TRACKS];
-    private final double[] vuL       = new double[MAX_TRACKS];
-    private final double[] vuR       = new double[MAX_TRACKS];
+    private final int[]     position = new int[MAX_TRACKS];
+    private final double[]  colorR   = new double[MAX_TRACKS];
+    private final double[]  colorG   = new double[MAX_TRACKS];
+    private final double[]  colorB   = new double[MAX_TRACKS];
+    private final double[]  vuL      = new double[MAX_TRACKS];
+    private final double[]  vuR      = new double[MAX_TRACKS];
     private final boolean[] exists   = new boolean[MAX_TRACKS];
+    // Normalized volume (0–1) for each track — used to compute dB adjustments.
+    private final double[]  volumes  = new double[MAX_TRACKS];
 
-    private String masterName = "Master";
-    private double masterVuL  = 0.0;
-    private double masterVuR  = 0.0;
+    private String  masterName   = "Master";
+    private double  masterVuL    = 0.0;
+    private double  masterVuR    = 0.0;
     private boolean masterExists = false;
+    private double  masterVolume = 0.794; // default ≈ 0 dB
 
     protected GilliganExtension(GilliganExtensionDefinition definition, ControllerHost host) {
         super(definition, host);
@@ -71,7 +74,9 @@ public class GilliganExtension extends ControllerExtension {
                 colorB[idx] = b;
             });
 
-            // VU: scale 0–127, channel 0=L 1=R, peakMode=true
+            track.volume().markInterested();
+            track.volume().addValueObserver(v -> volumes[idx] = v);
+
             track.addVuMeterObserver(127, 0, true, v -> vuL[idx] = v / 127.0);
             track.addVuMeterObserver(127, 1, true, v -> vuR[idx] = v / 127.0);
         }
@@ -80,27 +85,70 @@ public class GilliganExtension extends ControllerExtension {
         masterTrack.exists().addValueObserver(v -> masterExists = v);
         masterTrack.name().markInterested();
         masterTrack.name().addValueObserver(v -> masterName = v);
+        masterTrack.volume().markInterested();
+        masterTrack.volume().addValueObserver(v -> masterVolume = v);
         masterTrack.addVuMeterObserver(127, 0, true, v -> masterVuL = v / 127.0);
         masterTrack.addVuMeterObserver(127, 1, true, v -> masterVuR = v / 127.0);
 
         ipcServer = new IpcServer(host);
         ipcServer.start();
 
-        // Kick off the 100 ms publish loop.
         host.scheduleTask(this::tick, 100);
 
         host.showPopupNotification("Gilligan initialized");
     }
 
     private void tick() {
-        // Drain any inbound messages from Skipper (FixActions arrive here in Phase 12).
-        ipcServer.drainInbound(msg -> getHost().println("Gilligan inbound: " + msg));
+        // Execute any fix actions Skipper sent us.
+        ipcServer.drainInbound(this::executeFixAction);
 
-        // Serialise the current track table and hand it to the IPC worker.
+        // Publish the current track table.
         ipcServer.setFrame(buildTrackTable().getBytes(StandardCharsets.UTF_8));
 
         getHost().scheduleTask(this::tick, 100);
     }
+
+    // ── Fix-action execution ──────────────────────────────────────────────────
+
+    private void executeFixAction(String json) {
+        if (!json.contains("\"adjust_volume\"")) return;
+
+        double deltaDb = parseDouble(json, "delta_db");
+        String trackName = parseString(json, "track_name"); // null = master
+
+        // Bitwig automatically creates an undo entry for each setImmediately()
+        // call made from a controller extension — no explicit undo block needed.
+        if (trackName == null) {
+            double newVol = applyDeltaDb(masterVolume, deltaDb);
+            masterTrack.volume().setImmediately(newVol);
+        } else {
+            for (int i = 0; i < MAX_TRACKS; i++) {
+                if (exists[i] && trackName.equals(names[i])) {
+                    double newVol = applyDeltaDb(volumes[i], deltaDb);
+                    trackBank.getItemAt(i).volume().setImmediately(newVol);
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Convert a dB delta to a new normalized fader value.
+     *
+     * Bitwig's volume fader uses approximately a square-root taper, so the
+     * mapping is: volume_dB ≈ 40 * log10(normalized).  Inverting:
+     *   new_normalized = old_normalized * 10^(delta_dB / 40)
+     *
+     * This gives the correct adjustment for a sqrt-law taper.  Small errors
+     * for other taper shapes are acceptable — the undo block lets the user revert.
+     */
+    private static double applyDeltaDb(double normalized, double deltaDb) {
+        if (normalized <= 0.0) return 0.0;
+        double factor = Math.pow(10.0, deltaDb / 40.0);
+        return Math.max(0.0, Math.min(1.0, normalized * factor));
+    }
+
+    // ── Track-table serialisation ─────────────────────────────────────────────
 
     private String buildTrackTable() {
         StringBuilder sb = new StringBuilder(4096);
@@ -111,13 +159,13 @@ public class GilliganExtension extends ControllerExtension {
             if (!exists[i]) continue;
             if (!first) sb.append(',');
             first = false;
-            appendTrack(sb, i, names[i], types[i], isGroup[i], position[i],
-                        colorR[i], colorG[i], colorB[i], vuL[i], vuR[i]);
+            appendTrackRow(sb, i, names[i], types[i], isGroup[i], position[i],
+                           colorR[i], colorG[i], colorB[i], vuL[i], vuR[i]);
         }
 
         if (masterExists) {
             if (!first) sb.append(',');
-            appendTrackRaw(sb, -1, masterName, "Master", false, -1,
+            appendTrackRow(sb, -1, masterName, "Master", false, -1,
                            0.5, 0.5, 0.5, masterVuL, masterVuR);
         }
 
@@ -125,13 +173,7 @@ public class GilliganExtension extends ControllerExtension {
         return sb.toString();
     }
 
-    private static void appendTrack(StringBuilder sb, int idx,
-            String name, String type, boolean group, int pos,
-            double r, double g, double b, double vl, double vr) {
-        appendTrackRaw(sb, idx, name, type, group, pos, r, g, b, vl, vr);
-    }
-
-    private static void appendTrackRaw(StringBuilder sb, int idx,
+    private static void appendTrackRow(StringBuilder sb, int idx,
             String name, String type, boolean group, int pos,
             double r, double g, double b, double vl, double vr) {
         sb.append("{\"idx\":").append(idx);
@@ -147,12 +189,47 @@ public class GilliganExtension extends ControllerExtension {
         sb.append('}');
     }
 
+    // ── Minimal JSON helpers (no external dependencies) ───────────────────────
+
     private static String escapeJson(String s) {
         return s.replace("\\", "\\\\")
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "\\r")
                 .replace("\t", "\\t");
+    }
+
+    /** Extract a numeric value for {@code "key": <number>} from a JSON string. */
+    private static double parseDouble(String json, String key) {
+        String search = "\"" + key + "\":";
+        int start = json.indexOf(search);
+        if (start < 0) return 0.0;
+        start += search.length();
+        while (start < json.length() && json.charAt(start) == ' ') start++;
+        int end = start;
+        while (end < json.length() && ",}".indexOf(json.charAt(end)) < 0) end++;
+        try {
+            return Double.parseDouble(json.substring(start, end).trim());
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    /** Extract a string value for {@code "key": "value"} from a JSON string.
+     *  Returns null if the key is absent. */
+    private static String parseString(String json, String key) {
+        String search = "\"" + key + "\":\"";
+        int start = json.indexOf(search);
+        if (start < 0) return null;
+        start += search.length();
+        int end = start;
+        while (end < json.length() && json.charAt(end) != '"') {
+            if (json.charAt(end) == '\\') end++; // skip escape
+            end++;
+        }
+        return json.substring(start, end)
+                   .replace("\\\"", "\"")
+                   .replace("\\\\", "\\");
     }
 
     @Override

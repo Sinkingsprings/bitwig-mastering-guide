@@ -391,18 +391,27 @@ fn render_master(
             ("○", egui::Color32::from_rgb(90, 90, 100))
         };
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(dot).size(9.0).color(dot_color),
-            )
-            .on_hover_text(if gs.connected {
-                "Gilligan controller extension is connected"
-            } else {
-                "Gilligan not connected — install the extension and enable it in Bitwig preferences"
-            });
+            ui.label(egui::RichText::new(dot).size(9.0).color(dot_color))
+                .on_hover_text(if gs.connected {
+                    "Gilligan is connected and sending track data every 100 ms."
+                } else {
+                    "Gilligan is not connected.\n\
+                     See the ? help guide for setup instructions."
+                });
             ui.label(
                 egui::RichText::new("GILLIGAN")
                     .size(9.0)
                     .color(egui::Color32::from_rgb(90, 90, 100)),
+            )
+            .on_hover_text(
+                "Gilligan is a companion Bitwig controller extension that reads every \
+                 track's name, type, color, and post-fader VU levels directly from \
+                 the DAW — no per-track plugin insertion required.\n\n\
+                 When connected, the track list below updates automatically every \
+                 100 ms. Future versions will use this data to auto-fill track roles \
+                 and apply fix actions (e.g. adjusting fader levels) from the advice \
+                 panel.\n\n\
+                 See the ? help guide for setup instructions.",
             );
         });
 
@@ -417,10 +426,19 @@ fn render_master(
                         .striped(true)
                         .show(ui, |ui| {
                             for (h, tip) in &[
-                                ("Track", "Track name from Bitwig"),
-                                ("Type",  "Track type (Instrument/Audio/Effect/Group/Master)"),
-                                ("VU L",  "Post-fader VU left channel"),
-                                ("VU R",  "Post-fader VU right channel"),
+                                ("Track",
+                                 "Track name as reported by Bitwig. \
+                                  Colour matches the track colour in the arrange view."),
+                                ("Type",
+                                 "Track type: Instrument, Audio, Effect, Group, or Master. \
+                                  Used by the rule engine to apply type-aware advice."),
+                                ("VU L",
+                                 "Post-fader peak VU — left channel. \
+                                  Measured by Bitwig's own metering after the fader and \
+                                  any master effects on that track. 0 % = silence, \
+                                  100 % = 0 dBFS digital full-scale."),
+                                ("VU R",
+                                 "Post-fader peak VU — right channel."),
                             ] {
                                 ui.label(
                                     egui::RichText::new(*h)
@@ -432,22 +450,52 @@ fn render_master(
                             ui.end_row();
                             for t in gs.tracks.iter() {
                                 let [r, g, b] = t.color;
+                                let row_tip = format!(
+                                    "Name: {}\nType: {}{}\nBitwig position: {}",
+                                    t.name,
+                                    t.track_type,
+                                    if t.is_group { " (Group)" } else { "" },
+                                    if t.position >= 0 {
+                                        t.position.to_string()
+                                    } else {
+                                        "master".to_string()
+                                    },
+                                );
                                 ui.label(
                                     egui::RichText::new(&t.name)
                                         .size(10.0)
                                         .color(egui::Color32::from_rgb(r, g, b)),
-                                );
+                                )
+                                .on_hover_text(&row_tip);
                                 ui.label(
                                     egui::RichText::new(&t.track_type)
                                         .size(9.0)
                                         .color(egui::Color32::from_rgb(120, 120, 130)),
-                                );
-                                ui.label(vu_text(t.vu_l));
-                                ui.label(vu_text(t.vu_r));
+                                )
+                                .on_hover_text(&row_tip);
+                                ui.label(vu_text(t.vu_l))
+                                    .on_hover_text("Post-fader peak VU — left channel");
+                                ui.label(vu_text(t.vu_r))
+                                    .on_hover_text("Post-fader peak VU — right channel");
                                 ui.end_row();
                             }
                         });
                 });
+        } else if !gs.connected {
+            ui.label(
+                egui::RichText::new(
+                    "Not connected. Open Bitwig Preferences → Controllers, \
+                     add Gilligan, and enable it.",
+                )
+                .size(9.0)
+                .color(egui::Color32::from_rgb(80, 80, 90)),
+            )
+            .on_hover_text(
+                "Gilligan is a companion controller extension (not a MIDI device).\n\
+                 In Bitwig: Preferences → Controllers → Add controller manually\n\
+                 → Manufacturer: Sinkingsprings → Gilligan.\n\
+                 No MIDI ports are needed — just enable it and click the tick mark.",
+            );
         }
     }
 
@@ -893,12 +941,86 @@ fn render_help(ui: &mut egui::Ui) {
         ));
 
         ui.add_space(6.0);
+        help_section(ui, "GILLIGAN — COMPANION CONTROLLER EXTENSION");
+        ui.label(dim_help(
+            "Gilligan is an optional Bitwig controller extension that works \
+             alongside this plugin. It reads every track's name, type, colour, \
+             and post-fader VU levels directly from the DAW — no per-track \
+             plugin insertion needed.",
+        ));
+
+        ui.add_space(4.0);
+        help_entry(
+            ui,
+            "Why use Gilligan?",
+            "Without it, the master view only knows about tracks that have a \
+             Mastering Guide instance inserted. With Gilligan connected, every \
+             track in your project appears automatically in the Gilligan list, \
+             giving you a live VU overview of the whole session.",
+        );
+        help_entry(
+            ui,
+            "Future capabilities",
+            "Upcoming phases will use Gilligan to auto-fill track roles \
+             (Vocal/Drums/Bass…) from track names and colours, and to execute \
+             \"Apply Fix\" actions — for example, reducing a track's fader by \
+             4 dB with a single click, wrapped in Bitwig's undo history.",
+        );
+
+        ui.add_space(4.0);
+        help_section(ui, "GILLIGAN SETUP");
+        ui.label(dim_help(
+            "1. In Bitwig: Preferences → Controllers.\n\
+             2. Click \"Add controller manually\".\n\
+             3. Manufacturer: Sinkingsprings  →  Controller: Gilligan.\n\
+             4. No MIDI ports are required — leave both set to None.\n\
+             5. Click the tick mark (✓) to activate.\n\
+             6. The ● dot in the Mastering Guide master view turns green \
+                when the connection is established (usually within 2 seconds).\n\n\
+             Gilligan only needs to be added once per Bitwig installation. \
+             It starts automatically every time Bitwig opens.",
+        ));
+
+        ui.add_space(4.0);
+        help_entry(
+            ui,
+            "● / ○ indicator",
+            "Green ● = Gilligan is connected and sending data. \
+             Grey ○ = not connected. Check that the extension is enabled \
+             in Preferences → Controllers.",
+        );
+        help_entry(
+            ui,
+            "VU columns",
+            "Post-fader peak levels measured by Bitwig's own metering engine. \
+             0 % = silence, 100 % = 0 dBFS. These are not LUFS — use the \
+             Track-mode plugin instances for accurate integrated loudness.",
+        );
+        help_entry(
+            ui,
+            "Track colours",
+            "Each row's text is drawn in the track's own colour from the \
+             arrange view, making it easy to identify tracks at a glance.",
+        );
+        help_entry(
+            ui,
+            "Troubleshooting",
+            "If Gilligan stays grey: confirm it is ticked in Bitwig \
+             Preferences → Controllers (the extension must show a green LED, \
+             not a grey one). If the LED is red, check the Bitwig script \
+             console (Preferences → Controllers → Show script console) \
+             for Java errors.",
+        );
+
+        ui.add_space(6.0);
         help_section(ui, "WORKFLOW TIPS");
         ui.label(dim_help(
             "• Play from the very start for accurate integrated LUFS.\n\
              • Use Auto (5 s) for a hands-free live update during playback.\n\
              • Switch Genre/Platform to compare different release contexts.\n\
-             • Track spectrum overlay helps spot frequency clashes between stems.",
+             • Track spectrum overlay helps spot frequency clashes between stems.\n\
+             • Install Gilligan for a whole-session VU overview without inserting \
+               a plugin on every track.",
         ));
     });
 }

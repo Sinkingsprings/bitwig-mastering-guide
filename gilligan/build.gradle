@@ -1,0 +1,39 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    maven { url = uri('https://maven.bitwig.com/') }
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.bitwig:extension-api:25'
+}
+
+group = 'com.sinkingsprings'
+version = '0.1'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+jar {
+    archiveFileName = 'Gilligan.bwextension'
+    // Bundle all dependencies into the jar (fat jar) so Bitwig can load it standalone.
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+def extensionsDir = file("${System.getProperty('user.home')}/Bitwig Studio/Extensions")
+
+task install(type: Copy, dependsOn: jar) {
+    from jar.archiveFile
+    into extensionsDir
+    doLast {
+        println "Installed: ${extensionsDir}/Gilligan.bwextension"
+    }
+}

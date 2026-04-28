@@ -7,6 +7,7 @@ use crate::engine::genres::genre_for;
 use crate::engine::platforms::platform_for;
 use crate::ipc::Registry;
 use crate::ipc::registry::TrackEntry;
+use crate::ipc::{GilliganState, spawn_gilligan};
 use crate::params::{MasteringGuideParams, ModeParam};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
@@ -27,18 +28,14 @@ struct MasterState {
     auto_analyze: bool,
     show_track_spectrum: bool,
     show_help: bool,
-    /// User-captured master snapshot used as a reference overlay on the
-    /// spectrum chart. Lives for the lifetime of this editor instance — not
-    /// persisted across plugin reloads.
     reference: Option<TrackFrame>,
-    /// Last UI-scale factor we pushed into the egui ctx + the host. We
-    /// only re-apply on change so we don't fire request_resize every frame.
-    /// 0.0 means "not yet applied" and forces the first frame to apply.
     last_applied_scale: f32,
+    /// Shared handle to the Gilligan IPC client state.
+    gilligan: Arc<Mutex<GilliganState>>,
 }
 
-impl Default for MasterState {
-    fn default() -> Self {
+impl MasterState {
+    fn new(gilligan: Arc<Mutex<GilliganState>>) -> Self {
         Self {
             advice: Vec::new(),
             last_tracks: Vec::new(),
@@ -48,6 +45,7 @@ impl Default for MasterState {
             show_help: false,
             reference: None,
             last_applied_scale: 0.0,
+            gilligan,
         }
     }
 }
@@ -68,7 +66,9 @@ pub fn create_editor(
     track_name: String,
 ) -> Option<Box<dyn Editor>> {
     let egui_state = params.editor_state.clone();
-    let state: Arc<Mutex<MasterState>> = Arc::new(Mutex::new(MasterState::default()));
+    let gilligan: Arc<Mutex<GilliganState>> = Arc::new(Mutex::new(GilliganState::default()));
+    spawn_gilligan(gilligan.clone());
+    let state: Arc<Mutex<MasterState>> = Arc::new(Mutex::new(MasterState::new(gilligan)));
     let scale_egui_state = egui_state.clone();
 
     create_egui_editor(
@@ -378,6 +378,76 @@ fn render_master(
                 .size(10.0)
                 .color(egui::Color32::from_rgb(90, 90, 100)),
             );
+        }
+    }
+
+    // ── Gilligan track list ──────────────────────────────────────────────
+    {
+        let g = state.lock().unwrap_or_else(|p| p.into_inner());
+        let gs = g.gilligan.lock().unwrap_or_else(|p| p.into_inner());
+        let (dot, dot_color) = if gs.connected {
+            ("●", egui::Color32::from_rgb(80, 200, 100))
+        } else {
+            ("○", egui::Color32::from_rgb(90, 90, 100))
+        };
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(dot).size(9.0).color(dot_color),
+            )
+            .on_hover_text(if gs.connected {
+                "Gilligan controller extension is connected"
+            } else {
+                "Gilligan not connected — install the extension and enable it in Bitwig preferences"
+            });
+            ui.label(
+                egui::RichText::new("GILLIGAN")
+                    .size(9.0)
+                    .color(egui::Color32::from_rgb(90, 90, 100)),
+            );
+        });
+
+        if !gs.tracks.is_empty() {
+            egui::ScrollArea::vertical()
+                .id_salt("gilligan_scroll")
+                .max_height(80.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("gilligan_table")
+                        .num_columns(4)
+                        .spacing([6.0, 1.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for (h, tip) in &[
+                                ("Track", "Track name from Bitwig"),
+                                ("Type",  "Track type (Instrument/Audio/Effect/Group/Master)"),
+                                ("VU L",  "Post-fader VU left channel"),
+                                ("VU R",  "Post-fader VU right channel"),
+                            ] {
+                                ui.label(
+                                    egui::RichText::new(*h)
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(90, 90, 100)),
+                                )
+                                .on_hover_text(*tip);
+                            }
+                            ui.end_row();
+                            for t in gs.tracks.iter() {
+                                let [r, g, b] = t.color;
+                                ui.label(
+                                    egui::RichText::new(&t.name)
+                                        .size(10.0)
+                                        .color(egui::Color32::from_rgb(r, g, b)),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&t.track_type)
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(120, 120, 130)),
+                                );
+                                ui.label(vu_text(t.vu_l));
+                                ui.label(vu_text(t.vu_r));
+                                ui.end_row();
+                            }
+                        });
+                });
         }
     }
 
@@ -1009,6 +1079,18 @@ fn meter_color(value: f32, lo: f32, hi: f32) -> egui::Color32 {
     } else {
         egui::Color32::from_rgb(210, 65, 55)
     }
+}
+
+fn vu_text(vu: f32) -> egui::RichText {
+    let pct = (vu * 100.0) as u32;
+    let color = if vu > 0.85 {
+        egui::Color32::from_rgb(210, 65, 55)
+    } else if vu > 0.6 {
+        egui::Color32::from_rgb(200, 165, 45)
+    } else {
+        egui::Color32::from_rgb(70, 175, 85)
+    };
+    egui::RichText::new(format!("{}%", pct)).size(10.0).color(color)
 }
 
 fn corr_rgb(corr: f32) -> (u8, u8, u8) {

@@ -20,6 +20,7 @@ crossbeam-queue = "0.3"
 atomic_float = "1.0"
 num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Redirect all transitive consumers of audio-forge-rs/baseview to our patched
 # fork that exits gracefully on POLLERR instead of panicking.

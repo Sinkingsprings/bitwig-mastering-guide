@@ -70,16 +70,16 @@ public class GilliganExtension extends ControllerExtension {
                 colorB[idx] = b;
             });
 
-            track.volume().markInterested();
-            track.volume().addValueObserver(v -> volumes[idx] = v);
+            track.volume().value().markInterested();
+            track.volume().value().addValueObserver(v -> volumes[idx] = v);
         }
 
         masterTrack.exists().markInterested();
         masterTrack.exists().addValueObserver(v -> masterExists = v);
         masterTrack.name().markInterested();
         masterTrack.name().addValueObserver(v -> masterName = v);
-        masterTrack.volume().markInterested();
-        masterTrack.volume().addValueObserver(v -> masterVolume = v);
+        masterTrack.volume().value().markInterested();
+        masterTrack.volume().value().addValueObserver(v -> masterVolume = v);
 
         ipcServer = new IpcServer(host);
         ipcServer.start();
@@ -111,12 +111,12 @@ public class GilliganExtension extends ControllerExtension {
         // call made from a controller extension — no explicit undo block needed.
         if (trackName == null) {
             double newVol = applyDeltaDb(masterVolume, deltaDb);
-            masterTrack.volume().setImmediately(newVol);
+            masterTrack.volume().value().setImmediately(newVol);
         } else {
             for (int i = 0; i < MAX_TRACKS; i++) {
                 if (exists[i] && trackName.equals(names[i])) {
                     double newVol = applyDeltaDb(volumes[i], deltaDb);
-                    trackBank.getItemAt(i).volume().setImmediately(newVol);
+                    trackBank.getItemAt(i).volume().value().setImmediately(newVol);
                     break;
                 }
             }

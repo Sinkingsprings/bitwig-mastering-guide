@@ -23,6 +23,7 @@ mod params;
 mod plugin;
 
 use ipc::Registry;
+use ipc::spawn_gilligan;
 use params::ModeParam;
 use plugin::MasteringGuide;
 
@@ -59,6 +60,14 @@ impl Plugin for MasteringGuide {
         self.sample_rate = buffer_config.sample_rate;
         if !self.analysis.initialize(buffer_config.sample_rate, buffer_config.max_buffer_size as usize) {
             return false;
+        }
+
+        // Spawn the Gilligan IPC client once — on the first initialize() call
+        // the Arc has only the plugin's reference (refcount = 1), so spawning
+        // hasn't happened yet. On re-activation the GUI's Arc clone keeps the
+        // thread alive across reinitializations, so we don't double-spawn.
+        if Arc::strong_count(&self.gilligan) == 1 {
+            spawn_gilligan(self.gilligan.clone());
         }
 
         // Use the CLAP track-info extension to get the real track name when
@@ -103,7 +112,8 @@ impl Plugin for MasteringGuide {
         let frame_reader = self.analysis.reader();
         let registry = self.registry.clone();
         let track_name = self.track_name.clone();
-        gui::create_editor(params, frame_reader, registry, track_name)
+        let gilligan = self.gilligan.clone();
+        gui::create_editor(params, frame_reader, registry, track_name, gilligan)
     }
 }
 

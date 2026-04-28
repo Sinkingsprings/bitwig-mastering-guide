@@ -7,7 +7,7 @@ use crate::engine::genres::genre_for;
 use crate::engine::platforms::platform_for;
 use crate::ipc::Registry;
 use crate::ipc::registry::TrackEntry;
-use crate::ipc::{GilliganState, spawn_gilligan};
+use crate::ipc::gilligan::GilliganState;
 use crate::params::{MasteringGuideParams, ModeParam};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
@@ -64,10 +64,9 @@ pub fn create_editor(
     frame_reader: FrameReader,
     registry: Option<Arc<Registry>>,
     track_name: String,
+    gilligan: Arc<Mutex<GilliganState>>,
 ) -> Option<Box<dyn Editor>> {
     let egui_state = params.editor_state.clone();
-    let gilligan: Arc<Mutex<GilliganState>> = Arc::new(Mutex::new(GilliganState::default()));
-    spawn_gilligan(gilligan.clone());
     let state: Arc<Mutex<MasterState>> = Arc::new(Mutex::new(MasterState::new(gilligan)));
     let scale_egui_state = egui_state.clone();
 

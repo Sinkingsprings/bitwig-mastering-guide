@@ -421,7 +421,7 @@ fn render_master(
                 .max_height(80.0)
                 .show(ui, |ui| {
                     egui::Grid::new("gilligan_table")
-                        .num_columns(4)
+                        .num_columns(2)
                         .spacing([6.0, 1.0])
                         .striped(true)
                         .show(ui, |ui| {
@@ -432,13 +432,6 @@ fn render_master(
                                 ("Type",
                                  "Track type: Instrument, Audio, Effect, Group, or Master. \
                                   Used by the rule engine to apply type-aware advice."),
-                                ("VU L",
-                                 "Post-fader peak VU — left channel. \
-                                  Measured by Bitwig's own metering after the fader and \
-                                  any master effects on that track. 0 % = silence, \
-                                  100 % = 0 dBFS digital full-scale."),
-                                ("VU R",
-                                 "Post-fader peak VU — right channel."),
                             ] {
                                 ui.label(
                                     egui::RichText::new(*h)
@@ -473,10 +466,6 @@ fn render_master(
                                         .color(egui::Color32::from_rgb(120, 120, 130)),
                                 )
                                 .on_hover_text(&row_tip);
-                                ui.label(vu_text(t.vu_l))
-                                    .on_hover_text("Post-fader peak VU — left channel");
-                                ui.label(vu_text(t.vu_r))
-                                    .on_hover_text("Post-fader peak VU — right channel");
                                 ui.end_row();
                             }
                         });
@@ -1038,10 +1027,10 @@ fn render_help(ui: &mut egui::Ui) {
         );
         help_entry(
             ui,
-            "VU columns",
-            "Post-fader peak levels measured by Bitwig's own metering engine. \
-             0 % = silence, 100 % = 0 dBFS. These are not LUFS — use the \
-             Track-mode plugin instances for accurate integrated loudness.",
+            "Track type",
+            "Instrument, Audio, Effect, Group, or Master — the Bitwig track type. \
+             Future phases will use this alongside track name to auto-fill the \
+             Track Role selector (Vocal/Drums/Bass…) without manual configuration.",
         );
         help_entry(
             ui,
@@ -1248,18 +1237,6 @@ fn meter_color(value: f32, lo: f32, hi: f32) -> egui::Color32 {
     } else {
         egui::Color32::from_rgb(210, 65, 55)
     }
-}
-
-fn vu_text(vu: f32) -> egui::RichText {
-    let pct = (vu * 100.0) as u32;
-    let color = if vu > 0.85 {
-        egui::Color32::from_rgb(210, 65, 55)
-    } else if vu > 0.6 {
-        egui::Color32::from_rgb(200, 165, 45)
-    } else {
-        egui::Color32::from_rgb(70, 175, 85)
-    };
-    egui::RichText::new(format!("{}%", pct)).size(10.0).color(color)
 }
 
 fn corr_rgb(corr: f32) -> (u8, u8, u8) {

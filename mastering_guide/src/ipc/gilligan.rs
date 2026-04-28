@@ -38,7 +38,9 @@ struct WireTrack {
     color_r: u8,
     color_g: u8,
     color_b: u8,
+    #[serde(default)]
     vu_l: f32,
+    #[serde(default)]
     vu_r: f32,
 }
 

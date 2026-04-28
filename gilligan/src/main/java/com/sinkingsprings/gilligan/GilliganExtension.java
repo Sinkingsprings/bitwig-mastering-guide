@@ -24,15 +24,11 @@ public class GilliganExtension extends ControllerExtension {
     private final double[]  colorR   = new double[MAX_TRACKS];
     private final double[]  colorG   = new double[MAX_TRACKS];
     private final double[]  colorB   = new double[MAX_TRACKS];
-    private final double[]  vuL      = new double[MAX_TRACKS];
-    private final double[]  vuR      = new double[MAX_TRACKS];
     private final boolean[] exists   = new boolean[MAX_TRACKS];
     // Normalized volume (0–1) for each track — used to compute dB adjustments.
     private final double[]  volumes  = new double[MAX_TRACKS];
 
     private String  masterName   = "Master";
-    private double  masterVuL    = 0.0;
-    private double  masterVuR    = 0.0;
     private boolean masterExists = false;
     private double  masterVolume = 0.794; // default ≈ 0 dB
 
@@ -76,9 +72,6 @@ public class GilliganExtension extends ControllerExtension {
 
             track.volume().markInterested();
             track.volume().addValueObserver(v -> volumes[idx] = v);
-
-            track.addVuMeterObserver(127, 0, true, v -> vuL[idx] = v / 127.0);
-            track.addVuMeterObserver(127, 1, true, v -> vuR[idx] = v / 127.0);
         }
 
         masterTrack.exists().markInterested();
@@ -87,8 +80,6 @@ public class GilliganExtension extends ControllerExtension {
         masterTrack.name().addValueObserver(v -> masterName = v);
         masterTrack.volume().markInterested();
         masterTrack.volume().addValueObserver(v -> masterVolume = v);
-        masterTrack.addVuMeterObserver(127, 0, true, v -> masterVuL = v / 127.0);
-        masterTrack.addVuMeterObserver(127, 1, true, v -> masterVuR = v / 127.0);
 
         ipcServer = new IpcServer(host);
         ipcServer.start();
@@ -160,13 +151,13 @@ public class GilliganExtension extends ControllerExtension {
             if (!first) sb.append(',');
             first = false;
             appendTrackRow(sb, i, names[i], types[i], isGroup[i], position[i],
-                           colorR[i], colorG[i], colorB[i], vuL[i], vuR[i]);
+                           colorR[i], colorG[i], colorB[i]);
         }
 
         if (masterExists) {
             if (!first) sb.append(',');
             appendTrackRow(sb, -1, masterName, "Master", false, -1,
-                           0.5, 0.5, 0.5, masterVuL, masterVuR);
+                           0.5, 0.5, 0.5);
         }
 
         sb.append("]}");
@@ -175,7 +166,7 @@ public class GilliganExtension extends ControllerExtension {
 
     private static void appendTrackRow(StringBuilder sb, int idx,
             String name, String type, boolean group, int pos,
-            double r, double g, double b, double vl, double vr) {
+            double r, double g, double b) {
         sb.append("{\"idx\":").append(idx);
         sb.append(",\"name\":\"").append(escapeJson(name != null ? name : "")).append('"');
         sb.append(",\"type\":\"").append(escapeJson(type != null ? type : "")).append('"');
@@ -184,8 +175,6 @@ public class GilliganExtension extends ControllerExtension {
         sb.append(",\"color_r\":").append((int) Math.round(r * 255));
         sb.append(",\"color_g\":").append((int) Math.round(g * 255));
         sb.append(",\"color_b\":").append((int) Math.round(b * 255));
-        sb.append(",\"vu_l\":").append(String.format("%.3f", vl));
-        sb.append(",\"vu_r\":").append(String.format("%.3f", vr));
         sb.append('}');
     }
 

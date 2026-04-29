@@ -175,7 +175,56 @@ public class GilliganExtension extends ControllerExtension {
         sb.append(",\"color_r\":").append((int) Math.round(r * 255));
         sb.append(",\"color_g\":").append((int) Math.round(g * 255));
         sb.append(",\"color_b\":").append((int) Math.round(b * 255));
+        sb.append(",\"role_hint\":\"").append(detectRole(name, type)).append('"');
         sb.append('}');
+    }
+
+    /**
+     * Heuristically detect a mix role from a track name and Bitwig track type.
+     * Returns one of "Vocal", "Harm", "Drums", "Bass", "Pad", "Fx", or "" (unknown).
+     *
+     * Patterns are intentionally conservative to minimise false positives.
+     * Case-insensitive substring matching; longer/more-specific patterns are
+     * checked before shorter ones to avoid shadowing.
+     */
+    static String detectRole(String name, String type) {
+        if (name == null || name.isEmpty()) return "";
+        String n = name.toLowerCase();
+
+        // Drums / percussion — very specific terms first
+        if (anyOf(n, "kick","snare","hihat","hi-hat","hi hat","overh","cymbal",
+                     "tom ","room mic","drum bus","drum grp","percussion","perc ")) return "Drums";
+        if (n.equals("drums") || n.startsWith("drums") || n.endsWith(" drums")) return "Drums";
+
+        // Bass
+        if (anyOf(n, "bass","sub bass","808","contrabass","bass guitar")) return "Bass";
+
+        // Harmony vocals (check before generic vocal to avoid "harmony lead" → wrong)
+        if (anyOf(n, "harmony","harmonies","harm ","choir","bg voc","bv ","backing voc","backup voc")) return "Harm";
+
+        // Lead vocals
+        if (anyOf(n, "vocal","voice","vox ","lead voc","singer","vocals")) return "Vocal";
+        if (n.equals("vox") || n.startsWith("vox ") || n.endsWith(" vox")) return "Vocal";
+        if (n.equals("lead") && "Instrument".equals(type)) return "Vocal";
+
+        // FX returns / aux sends
+        if (anyOf(n, " fx"," sfx","sound fx","foley","reverb return","delay return",
+                     "fx return","aux return")) return "Fx";
+        if (n.startsWith("fx ") || n.equals("fx")) return "Fx";
+
+        // Pads / atmospheres / sustained textures
+        if (anyOf(n, " pad","synth pad","string ","strings","atmos","atmosphere",
+                     "texture","ambient","wash ","sweep ","drone")) return "Pad";
+        if (n.startsWith("pad ") || n.equals("pad")) return "Pad";
+
+        return "";
+    }
+
+    private static boolean anyOf(String haystack, String... needles) {
+        for (String needle : needles) {
+            if (haystack.contains(needle)) return true;
+        }
+        return false;
     }
 
     // ── Minimal JSON helpers (no external dependencies) ───────────────────────

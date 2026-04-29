@@ -8,7 +8,7 @@ use crate::engine::platforms::platform_for;
 use crate::ipc::Registry;
 use crate::ipc::registry::TrackEntry;
 use crate::ipc::gilligan::GilliganState;
-use crate::params::{MasteringGuideParams, ModeParam};
+use crate::params::{MasteringGuideParams, ModeParam, TrackRole};
 use nih_plug::prelude::*;
 use nih_plug_egui::{create_egui_editor, egui, widgets};
 use std::sync::{Arc, Mutex};
@@ -420,7 +420,7 @@ fn render_master(
                 .max_height(80.0)
                 .show(ui, |ui| {
                     egui::Grid::new("gilligan_table")
-                        .num_columns(2)
+                        .num_columns(3)
                         .spacing([6.0, 1.0])
                         .striped(true)
                         .show(ui, |ui| {
@@ -429,8 +429,11 @@ fn render_master(
                                  "Track name as reported by Bitwig. \
                                   Colour matches the track colour in the arrange view."),
                                 ("Type",
-                                 "Track type: Instrument, Audio, Effect, Group, or Master. \
-                                  Used by the rule engine to apply type-aware advice."),
+                                 "Track type: Instrument, Audio, Effect, Group, or Master."),
+                                ("Role",
+                                 "Role detected automatically from the track name. \
+                                  Substituted for any Track-mode plugin instance whose \
+                                  Role param is set to Auto when Analyze is run."),
                             ] {
                                 ui.label(
                                     egui::RichText::new(*h)
@@ -443,15 +446,12 @@ fn render_master(
                             for t in gs.tracks.iter() {
                                 let [r, g, b] = t.color;
                                 let row_tip = format!(
-                                    "Name: {}\nType: {}{}\nBitwig position: {}",
+                                    "Name: {}\nType: {}{}\nBitwig position: {}\nDetected role: {}",
                                     t.name,
                                     t.track_type,
                                     if t.is_group { " (Group)" } else { "" },
-                                    if t.position >= 0 {
-                                        t.position.to_string()
-                                    } else {
-                                        "master".to_string()
-                                    },
+                                    if t.position >= 0 { t.position.to_string() } else { "master".to_string() },
+                                    if t.role_hint.is_empty() { "unknown" } else { &t.role_hint },
                                 );
                                 ui.label(
                                     egui::RichText::new(&t.name)
@@ -463,6 +463,17 @@ fn render_master(
                                     egui::RichText::new(&t.track_type)
                                         .size(9.0)
                                         .color(egui::Color32::from_rgb(120, 120, 130)),
+                                )
+                                .on_hover_text(&row_tip);
+                                let (role_text, role_color) = if t.role_hint.is_empty() {
+                                    ("—", egui::Color32::from_rgb(60, 60, 70))
+                                } else {
+                                    (t.role_hint.as_str(), egui::Color32::from_rgb(140, 185, 255))
+                                };
+                                ui.label(
+                                    egui::RichText::new(role_text)
+                                        .size(9.0)
+                                        .color(role_color),
                                 )
                                 .on_hover_text(&row_tip);
                                 ui.end_row();
@@ -1090,10 +1101,24 @@ fn run_analysis(
     registry: &Option<Arc<Registry>>,
     params: &Arc<MasteringGuideParams>,
 ) {
-    let tracks = registry
+    let mut tracks = registry
         .as_ref()
         .map(|r| r.read_tracks())
         .unwrap_or_default();
+
+    // Phase 13: for any track whose role param is Auto, substitute Gilligan's
+    // heuristic role hint if one is available.  Manual overrides (non-Auto) are
+    // always preserved.
+    {
+        let gs = s.gilligan.lock().unwrap_or_else(|p| p.into_inner());
+        for entry in &mut tracks {
+            if entry.role == TrackRole::Auto {
+                if let Some(gt) = gs.tracks.iter().find(|gt| gt.name == entry.name) {
+                    entry.role = hint_to_role(&gt.role_hint);
+                }
+            }
+        }
+    }
 
     s.last_tracks = tracks.clone();
 
@@ -1107,6 +1132,18 @@ fn run_analysis(
     };
     s.advice = evaluate(&ctx);
     s.last_analysis = Some(Instant::now());
+}
+
+fn hint_to_role(hint: &str) -> TrackRole {
+    match hint {
+        "Vocal" => TrackRole::Vocal,
+        "Harm"  => TrackRole::Harm,
+        "Drums" => TrackRole::Drums,
+        "Bass"  => TrackRole::Bass,
+        "Pad"   => TrackRole::Pad,
+        "Fx"    => TrackRole::Fx,
+        _       => TrackRole::Auto,
+    }
 }
 
 // ─── Reusable widgets ─────────────────────────────────────────────────────────

@@ -39,6 +39,8 @@ struct WireTrack {
     color_g: u8,
     color_b: u8,
     #[serde(default)]
+    role_hint: String,
+    #[serde(default)]
     vu_l: f32,
     #[serde(default)]
     vu_r: f32,
@@ -55,6 +57,9 @@ pub struct GilliganTrack {
     pub is_group: bool,
     pub position: i32,
     pub color: [u8; 3],
+    /// Heuristic role detected from the track name by Gilligan ("Vocal",
+    /// "Drums", "Bass", "Harm", "Pad", "Fx", or "" = unknown).
+    pub role_hint: String,
     pub vu_l: f32,
     pub vu_r: f32,
 }
@@ -161,6 +166,7 @@ fn serve_connection(mut stream: UnixStream, state: &Arc<Mutex<GilliganState>>) {
                         is_group: t.is_group,
                         position: t.position,
                         color: [t.color_r, t.color_g, t.color_b],
+                        role_hint: t.role_hint,
                         vu_l: t.vu_l,
                         vu_r: t.vu_r,
                     })
